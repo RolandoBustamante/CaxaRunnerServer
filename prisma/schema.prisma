@@ -1,0 +1,61 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model RaceState {
+  id        Int      @id @default(1)
+  started   Boolean  @default(false)
+  startTime BigInt?
+  closed    Boolean  @default(false)
+  endTime   BigInt?  @map("end_time")
+
+  @@map("race_state")
+}
+
+model Participant {
+  id           Int     @id @default(autoincrement())
+  documento    String  @unique
+  dorsal       String? @unique
+  nombre       String
+  edad         Int
+  genero       String
+  distancia    String
+  kitEntregado Boolean @default(false)
+  cartaFirmada Boolean @default(false)
+
+  @@map("participants")
+}
+
+model Finisher {
+  dorsal         String  @id
+  position       Int
+  timestamp      BigInt
+  elapsedMs      BigInt
+  disqualified   Boolean @default(false)
+  dqReason       String? @map("dq_reason")
+
+  @@map("finishers")
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  username     String   @unique
+  passwordHash String   @map("password_hash")
+  role         String   @default("USER")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  @@map("users")
+}
+
+model Config {
+  key   String @id
+  value String
+
+  @@map("config")
+}
