@@ -1,7 +1,7 @@
 require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
-const path = require("path");
+
 const { PrismaClient } = require("./generated/prisma");
 const requireAuth = require("./middleware/auth");
 const authRouter = require("./routes/auth");
@@ -41,9 +41,6 @@ app.get("/api/public", async (req, res) => {
 
 // Proteger todas las rutas /api/* siguientes
 app.use("/api", requireAuth);
-
-// Serve built React app in production
-app.use(express.static(path.join(__dirname, "./public")));
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -466,11 +463,6 @@ app.put("/api/config/categories", async (req, res) => {
     console.error(err);
     res.status(500).json({ error: "Error al guardar categorías" });
   }
-});
-
-// ── Fallback → React app ───────────────────────────────────────────────────
-app.get("/{*path}", (req, res) => {
-  res.sendFile(path.join(__dirname, "./public/index.html"));
 });
 
 // ── Start ──────────────────────────────────────────────────────────────────
