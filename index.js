@@ -27,6 +27,7 @@ app.get("/api/public", async (req, res) => {
       prisma.finisher.findMany({ orderBy: { position: "asc" }, take: 10 }),
     ]);
     res.json({
+      serverNow: Date.now(),
       raceStarted: race.started,
       raceClosed: race.closed,
       raceStartTime: race.startTime ? Number(race.startTime) : null,
@@ -70,6 +71,7 @@ app.get("/api/race", async (req, res) => {
     ]);
 
     res.json({
+      serverNow: Date.now(),
       raceStarted: race.started,
       raceClosed: race.closed,
       raceStartTime: race.startTime ? Number(race.startTime) : null,
