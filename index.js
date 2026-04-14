@@ -731,7 +731,7 @@ app.get("/api/public/:slug/results", async (req, res) => {
           id: finisher.id,
           dorsal: finisher.dorsal,
           position: finisher.disqualified ? null : finisher.position,
-          timeMs: Number(finisher.elapsedMs),
+          timeMs: Number(finisher.elapsedMs) / 1000,
           disqualified: finisher.disqualified,
           dqReason: finisher.dqReason ?? null,
           name: participant?.nombre || "-",
@@ -805,7 +805,7 @@ app.post("/api/public/:slug/certificate", async (req, res) => {
       certificate: {
         dorsal: finisher.dorsal,
         position: standings?.overallPosition ?? finisher.position,
-        timeMs: Number(finisher.elapsedMs),
+        timeMs: Number(finisher.elapsedMs) / 1000,
         name: participant.nombre,
         distance: participant.distancia,
         genderPosition: standings?.genderPosition ?? null,
@@ -877,7 +877,7 @@ app.post("/api/public/:slug/certificate/pdf", async (req, res) => {
     const certificate = {
       dorsal: finisher.dorsal,
       position: standings?.overallPosition ?? finisher.position,
-      timeMs: Number(finisher.elapsedMs),
+      timeMs: Number(finisher.elapsedMs) / 1000,
       name: participant.nombre,
       distance: participant.distancia,
       genderPosition: standings?.genderPosition ?? null,
