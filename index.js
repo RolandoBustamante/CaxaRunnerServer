@@ -179,9 +179,9 @@ function formatDateEs(date) {
   });
 }
 
-function formatCertificateTime(seconds) {
-  if (seconds == null || Number.isNaN(seconds)) return "--:--.--";
-  const totalCentis = Math.floor(Number(seconds) * 100);
+function formatCertificateTime(elapsedMs) {
+  if (elapsedMs == null || Number.isNaN(elapsedMs)) return "--:--:--.--";
+  const totalCentis = Math.floor(Number(elapsedMs) / 10);
   const hours = Math.floor(totalCentis / 360000);
   const minutes = Math.floor((totalCentis % 360000) / 6000);
   const secs = Math.floor((totalCentis % 6000) / 100);
@@ -348,7 +348,7 @@ function buildCertificateHtmlDocument(race, certificate) {
         .title {
           margin: 48px 0 8px;
           text-align: center;
-          font-size: 58px;
+          font-size: 52px;
           letter-spacing: 0.12em;
           color: var(--white);
         }
@@ -361,7 +361,7 @@ function buildCertificateHtmlDocument(race, certificate) {
         .name {
           margin: 42px 0 18px;
           text-align: center;
-          font-size: 54px;
+          font-size: 46px;
           font-weight: 700;
           color: var(--white);
           text-transform: uppercase;
@@ -371,7 +371,7 @@ function buildCertificateHtmlDocument(race, certificate) {
           margin: 0 auto;
           text-align: center;
           color: rgba(255, 255, 255, 0.92);
-          font: 500 24px/1.8 Arial, sans-serif;
+          font: 500 21px/1.75 Arial, sans-serif;
         }
         .summary strong {
           color: var(--gold);
@@ -386,15 +386,17 @@ function buildCertificateHtmlDocument(race, certificate) {
           background: rgba(255, 255, 255, 0.08);
           border: 1px solid rgba(255, 255, 255, 0.14);
           border-radius: 22px;
-          padding: 18px 16px 16px;
+          padding: 16px 14px 14px;
           text-align: center;
         }
         .metric-value {
           color: var(--white);
-          font: 800 44px/1 Arial, sans-serif;
+          font: 800 36px/1 Arial, sans-serif;
+          white-space: nowrap;
+          letter-spacing: 0.02em;
         }
         .metric:first-child .metric-value {
-          font-size: 48px;
+          font-size: 32px;
         }
         .metric-label {
           margin-top: 8px;
@@ -457,12 +459,12 @@ function buildCertificateHtmlDocument(race, certificate) {
           <div class="summary">
             Concluyo oficialmente la distancia de <strong>${escapeHtml(certificate.distance)}</strong>,
             ocupando el puesto <strong>${escapeHtml(certificate.position)}</strong> del orden general,
-            con un tiempo oficial de <strong>${escapeHtml(formatCertificateTime(certificate.time))}</strong>.
+            con un tiempo oficial de <strong>${escapeHtml(formatCertificateTime(certificate.timeMs))}</strong>.
           </div>
 
           <div class="metrics">
             <div class="metric">
-              <div class="metric-value">${escapeHtml(formatCertificateTime(certificate.time))}</div>
+              <div class="metric-value">${escapeHtml(formatCertificateTime(certificate.timeMs))}</div>
               <div class="metric-label">Tiempo oficial</div>
             </div>
             <div class="metric">
@@ -729,7 +731,7 @@ app.get("/api/public/:slug/results", async (req, res) => {
           id: finisher.id,
           dorsal: finisher.dorsal,
           position: finisher.disqualified ? null : finisher.position,
-          time: Number(finisher.elapsedMs) / 1000,
+          timeMs: Number(finisher.elapsedMs),
           disqualified: finisher.disqualified,
           dqReason: finisher.dqReason ?? null,
           name: participant?.nombre || "-",
@@ -803,7 +805,7 @@ app.post("/api/public/:slug/certificate", async (req, res) => {
       certificate: {
         dorsal: finisher.dorsal,
         position: standings?.overallPosition ?? finisher.position,
-        time: Number(finisher.elapsedMs) / 1000,
+        timeMs: Number(finisher.elapsedMs),
         name: participant.nombre,
         distance: participant.distancia,
         genderPosition: standings?.genderPosition ?? null,
@@ -875,7 +877,7 @@ app.post("/api/public/:slug/certificate/pdf", async (req, res) => {
     const certificate = {
       dorsal: finisher.dorsal,
       position: standings?.overallPosition ?? finisher.position,
-      time: Number(finisher.elapsedMs) / 1000,
+      timeMs: Number(finisher.elapsedMs),
       name: participant.nombre,
       distance: participant.distancia,
       genderPosition: standings?.genderPosition ?? null,
@@ -1064,6 +1066,39 @@ app.post("/api/races/:raceId/mark-official", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(err.statusCode || 500).json({ error: err.message || "Error al marcar oficial" });
+  }
+});
+
+app.put("/api/races/:raceId", async (req, res) => {
+  if (req.user.role !== "MASTER") {
+    return res.status(403).json({ error: "Sin permisos" });
+  }
+
+  try {
+    const race = await resolveRace(req);
+    const data = {};
+
+    if (req.body?.name != null) {
+      const name = String(req.body.name).trim();
+      if (!name) {
+        return res.status(400).json({ error: "name invalido" });
+      }
+      data.name = name;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "eventDate")) {
+      data.eventDate = req.body.eventDate ? new Date(req.body.eventDate) : null;
+    }
+
+    const updated = await prisma.race.update({
+      where: { id: race.id },
+      data,
+    });
+
+    res.json({ success: true, race: serializeRace(updated) });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al actualizar carrera" });
   }
 });
 
