@@ -172,11 +172,27 @@ function escapeHtml(value) {
 
 function formatDateEs(date) {
   if (!date) return "";
-  return new Date(date).toLocaleDateString("es-PE", {
+  const normalized = normalizeCalendarDate(date);
+  return normalized.toLocaleDateString("es-PE", {
     year: "numeric",
     month: "long",
     day: "numeric",
+    timeZone: "UTC",
   });
+}
+
+function normalizeCalendarDate(value) {
+  if (!value) return null;
+  const source = value instanceof Date ? value.toISOString() : String(value);
+  const match = source.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return new Date(value);
+  const [, year, month, day] = match;
+  return new Date(Date.UTC(Number(year), Number(month) - 1, Number(day), 12, 0, 0));
+}
+
+function parseEventDate(value) {
+  if (!value) return null;
+  return normalizeCalendarDate(value);
 }
 
 function formatCertificateTime(elapsedMs) {
@@ -940,7 +956,7 @@ app.post("/api/races", async (req, res) => {
       data: {
         name: String(name).trim(),
         slug: finalSlug,
-        eventDate: eventDate ? new Date(eventDate) : null,
+        eventDate: parseEventDate(eventDate),
         categories: categories ?? DEFAULT_CATEGORIES,
         distances: distances ?? null,
         status: "DRAFT",
@@ -1087,7 +1103,7 @@ app.put("/api/races/:raceId", async (req, res) => {
     }
 
     if (Object.prototype.hasOwnProperty.call(req.body || {}, "eventDate")) {
-      data.eventDate = req.body.eventDate ? new Date(req.body.eventDate) : null;
+      data.eventDate = parseEventDate(req.body.eventDate);
     }
 
     const updated = await prisma.race.update({
