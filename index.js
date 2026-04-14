@@ -2,10 +2,7 @@ require("dotenv").config();
 const express = require("express");
 const cors = require("cors");
 const fs = require("fs");
-const os = require("os");
 const path = require("path");
-const { execFile } = require("child_process");
-const { promisify } = require("util");
 
 const { PrismaClient } = require("./generated/prisma");
 const requireAuth = require("./middleware/auth");
@@ -13,7 +10,6 @@ const authRouter = require("./routes/auth");
 
 const prisma = new PrismaClient();
 const app = express();
-const execFileAsync = promisify(execFile);
 
 const DEFAULT_RACE_SLUG = "carrera-actual";
 const DEFAULT_CATEGORIES = [
@@ -23,13 +19,6 @@ const DEFAULT_CATEGORIES = [
   { name: "Master B", minAge: 50, maxAge: 59 },
   { name: "Master C", minAge: 60, maxAge: null },
 ];
-const BROWSER_CANDIDATES = [
-  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
-  "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
-  "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
-  "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
-];
-const CERTIFICATE_OUTPUT_DIR = path.join(os.tmpdir(), "race-timer-certificates");
 let cachedLogoDataUri = null;
 
 app.use(cors());
@@ -214,10 +203,6 @@ function getCertificateFileName(certificate) {
     .replace(/^-+|-+$/g, "")
     .toLowerCase();
   return `certificado-${safeName || "finisher"}-${String(certificate.dorsal || "").toLowerCase()}.pdf`;
-}
-
-function getBrowserExecutable() {
-  return BROWSER_CANDIDATES.find((candidate) => fs.existsSync(candidate)) || null;
 }
 
 function getLogoDataUri() {
@@ -495,42 +480,54 @@ function buildCertificateHtmlDocument(race, certificate) {
 }
 
 async function renderCertificatePdf(race, certificate) {
-  const browserExecutable = getBrowserExecutable();
-  if (!browserExecutable) {
-    const error = new Error("No se encontro un navegador compatible para generar PDF");
+  let playwright;
+  try {
+    playwright = require("playwright");
+  } catch {
+    const error = new Error("Playwright no esta instalado en el servidor");
     error.statusCode = 500;
     throw error;
   }
 
-  fs.mkdirSync(CERTIFICATE_OUTPUT_DIR, { recursive: true });
+  const launchOptions = {
+    headless: true,
+  };
+  if (process.env.PDF_BROWSER_PATH) {
+    launchOptions.executablePath = process.env.PDF_BROWSER_PATH;
+  }
 
-  const token = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const htmlPath = path.join(CERTIFICATE_OUTPUT_DIR, `${token}.html`);
-  const pdfPath = path.join(CERTIFICATE_OUTPUT_DIR, `${token}.pdf`);
-
+  let browser;
   try {
-    fs.writeFileSync(htmlPath, buildCertificateHtmlDocument(race, certificate), "utf8");
-
-    await execFileAsync(browserExecutable, [
-      "--headless=new",
-      "--disable-gpu",
-      "--no-first-run",
-      "--no-default-browser-check",
-      `--print-to-pdf=${pdfPath}`,
-      "--print-to-pdf-no-header",
-      "--allow-file-access-from-files",
-      "--virtual-time-budget=2000",
-      `file:///${htmlPath.replace(/\\/g, "/")}`,
-    ], {
-      windowsHide: true,
-      timeout: 20000,
-      maxBuffer: 1024 * 1024 * 8,
+    browser = await playwright.chromium.launch(launchOptions);
+    const page = await browser.newPage({
+      viewport: { width: 1120, height: 760 },
+      deviceScaleFactor: 1,
     });
-
-    return fs.readFileSync(pdfPath);
+    await page.setContent(buildCertificateHtmlDocument(race, certificate), {
+      waitUntil: "load",
+    });
+    await page.emulateMedia({ media: "print" });
+    return await page.pdf({
+      format: "A4",
+      landscape: true,
+      printBackground: true,
+      margin: {
+        top: "0",
+        right: "0",
+        bottom: "0",
+        left: "0",
+      },
+      preferCSSPageSize: true,
+    });
+  } catch (cause) {
+    const error = new Error("No se pudo generar el PDF con Playwright");
+    error.statusCode = 500;
+    error.cause = cause;
+    throw error;
   } finally {
-    if (fs.existsSync(htmlPath)) fs.unlinkSync(htmlPath);
-    if (fs.existsSync(pdfPath)) fs.unlinkSync(pdfPath);
+    if (browser) {
+      await browser.close();
+    }
   }
 }
 
