@@ -4,18 +4,34 @@ const { PrismaClient } = require("./generated/prisma");
 
 const prisma = new PrismaClient();
 
+const ADMIN_USERNAME = process.env.ADMIN_USERNAME || "admin";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin1234";
+
 async function main() {
-  const existing = await prisma.user.findUnique({ where: { username: "admin" } });
-  if (existing) {
-    console.log("El usuario master ya existe.");
-    return;
-  }
-  const passwordHash = await bcrypt.hash("admin123", 10);
-  const user = await prisma.user.create({
-    data: { username: "admin", passwordHash, role: "MASTER" },
+  const passwordHash = await bcrypt.hash(ADMIN_PASSWORD, 10);
+
+  const user = await prisma.user.upsert({
+    where: { username: ADMIN_USERNAME },
+    update: {
+      passwordHash,
+      role: "MASTER",
+    },
+    create: {
+      username: ADMIN_USERNAME,
+      passwordHash,
+      role: "MASTER",
+    },
   });
-  console.log(`Usuario master creado: ${user.username} (contraseña: admin123)`);
-  console.log("Cambia la contraseña después del primer login.");
+
+  console.log(`Usuario admin listo: ${user.username}`);
+  console.log(`Contrasena actual: ${ADMIN_PASSWORD}`);
 }
 
-main().catch(console.error).finally(() => prisma.$disconnect());
+main()
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });

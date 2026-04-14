@@ -14,7 +14,16 @@ router.post("/login", async (req, res) => {
     return res.status(400).json({ error: "Usuario y contraseña requeridos" });
 
   try {
-    const user = await prisma.user.findUnique({ where: { username } });
+    const user = await prisma.user.findUnique({
+      where: { username },
+      include: {
+        raceAssignments: {
+          include: {
+            race: true,
+          },
+        },
+      },
+    });
     if (!user) return res.status(401).json({ error: "Credenciales incorrectas" });
 
     const valid = await bcrypt.compare(password, user.passwordHash);
@@ -26,7 +35,21 @@ router.post("/login", async (req, res) => {
       { expiresIn: "8h" }
     );
 
-    res.json({ token, user: { id: user.id, username: user.username, role: user.role } });
+    res.json({
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        role: user.role,
+        races: user.raceAssignments.map((assignment) => ({
+          id: assignment.race.id,
+          slug: assignment.race.slug,
+          name: assignment.race.name,
+          status: assignment.race.status,
+          isOfficial: assignment.race.isOfficial,
+        })),
+      },
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Error al iniciar sesión" });
@@ -45,10 +68,25 @@ router.get("/users", requireAuth, async (req, res) => {
 
   try {
     const users = await prisma.user.findMany({
-      select: { id: true, username: true, role: true, createdAt: true },
+      include: {
+        raceAssignments: {
+          include: {
+            race: {
+              select: { id: true, slug: true, name: true, status: true, isOfficial: true },
+            },
+          },
+          orderBy: { raceId: "asc" },
+        },
+      },
       orderBy: { createdAt: "asc" },
     });
-    res.json(users);
+    res.json(users.map((user) => ({
+      id: user.id,
+      username: user.username,
+      role: user.role,
+      createdAt: user.createdAt,
+      races: user.raceAssignments.map((assignment) => assignment.race),
+    })));
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Error al obtener usuarios" });
@@ -96,6 +134,55 @@ router.delete("/users/:id", requireAuth, async (req, res) => {
       return res.status(404).json({ error: "Usuario no encontrado" });
     console.error(err);
     res.status(500).json({ error: "Error al eliminar usuario" });
+  }
+});
+
+router.post("/users/:id/races", requireAuth, async (req, res) => {
+  if (req.user.role !== "MASTER") {
+    return res.status(403).json({ error: "Sin permiso" });
+  }
+
+  const userId = parseInt(req.params.id, 10);
+  const raceId = parseInt(req.body.raceId, 10);
+  if (Number.isNaN(userId) || Number.isNaN(raceId)) {
+    return res.status(400).json({ error: "userId y raceId requeridos" });
+  }
+
+  try {
+    await prisma.raceUser.upsert({
+      where: { userId_raceId: { userId, raceId } },
+      update: {},
+      create: { userId, raceId },
+    });
+    res.json({ success: true });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al asignar carrera" });
+  }
+});
+
+router.delete("/users/:id/races/:raceId", requireAuth, async (req, res) => {
+  if (req.user.role !== "MASTER") {
+    return res.status(403).json({ error: "Sin permiso" });
+  }
+
+  const userId = parseInt(req.params.id, 10);
+  const raceId = parseInt(req.params.raceId, 10);
+  if (Number.isNaN(userId) || Number.isNaN(raceId)) {
+    return res.status(400).json({ error: "userId y raceId requeridos" });
+  }
+
+  try {
+    await prisma.raceUser.delete({
+      where: { userId_raceId: { userId, raceId } },
+    });
+    res.json({ success: true });
+  } catch (err) {
+    if (err.code === "P2025") {
+      return res.status(404).json({ error: "Asignacion no encontrada" });
+    }
+    console.error(err);
+    res.status(500).json({ error: "Error al quitar carrera" });
   }
 });
 

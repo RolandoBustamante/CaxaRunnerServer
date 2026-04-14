@@ -8,38 +8,63 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model RaceState {
-  id        Int      @id @default(1)
-  started   Boolean  @default(false)
-  startTime BigInt?
-  closed    Boolean  @default(false)
-  endTime   BigInt?  @map("end_time")
+model Race {
+  id         Int       @id @default(autoincrement())
+  slug       String    @unique
+  name       String
+  eventDate  DateTime? @map("event_date")
+  status     String    @default("DRAFT")
+  isOfficial Boolean   @default(false) @map("is_official")
+  started    Boolean   @default(false)
+  startTime  BigInt?   @map("start_time")
+  closed     Boolean   @default(false)
+  endTime    BigInt?   @map("end_time")
+  categories Json?
+  distances  Json?
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @updatedAt @map("updated_at")
 
-  @@map("race_state")
+  participants Participant[]
+  finishers    Finisher[]
+  userAssignments RaceUser[]
+
+  @@map("races")
 }
 
 model Participant {
   id           Int     @id @default(autoincrement())
-  documento    String  @unique
-  dorsal       String? @unique
+  raceId       Int     @map("race_id")
+  documento    String
+  dorsal       String?
   nombre       String
   edad         Int
   genero       String
   distancia    String
-  kitEntregado Boolean @default(false)
-  cartaFirmada Boolean @default(false)
+  kitEntregado Boolean @default(false) @map("kit_entregado")
+  cartaFirmada Boolean @default(false) @map("carta_firmada")
+  isTestData   Boolean @default(false) @map("is_test_data")
 
+  race Race @relation(fields: [raceId], references: [id], onDelete: Cascade)
+
+  @@unique([raceId, documento])
+  @@unique([raceId, dorsal])
   @@map("participants")
 }
 
 model Finisher {
-  dorsal         String  @id
-  position       Int
-  timestamp      BigInt
-  elapsedMs      BigInt
-  disqualified   Boolean @default(false)
-  dqReason       String? @map("dq_reason")
+  id           Int     @id @default(autoincrement())
+  raceId       Int     @map("race_id")
+  dorsal       String
+  position     Int
+  timestamp    BigInt
+  elapsedMs    BigInt  @map("elapsed_ms")
+  disqualified Boolean @default(false)
+  dqReason     String? @map("dq_reason")
+  isTestData   Boolean @default(false) @map("is_test_data")
 
+  race Race @relation(fields: [raceId], references: [id], onDelete: Cascade)
+
+  @@unique([raceId, dorsal])
   @@map("finishers")
 }
 
@@ -50,7 +75,21 @@ model User {
   role         String   @default("USER")
   createdAt    DateTime @default(now()) @map("created_at")
 
+  raceAssignments RaceUser[]
+
   @@map("users")
+}
+
+model RaceUser {
+  id     Int @id @default(autoincrement())
+  userId Int @map("user_id")
+  raceId Int @map("race_id")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  race Race @relation(fields: [raceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, raceId])
+  @@map("race_users")
 }
 
 model Config {
