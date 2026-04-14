@@ -208,7 +208,19 @@ function getCertificateFileName(certificate) {
 function getLogoDataUri() {
   if (cachedLogoDataUri) return cachedLogoDataUri;
 
-  const logoPath = path.join(__dirname, "..", "client", "public", "crlogo-horizontal.svg");
+  const logoCandidates = [
+    process.env.CERTIFICATE_LOGO_PATH,
+    path.join(__dirname, "assets", "crlogo-horizontal.svg"),
+    path.join(__dirname, "..", "client", "public", "crlogo-horizontal.svg"),
+  ].filter(Boolean);
+
+  const logoPath = logoCandidates.find((candidate) => fs.existsSync(candidate));
+  if (!logoPath) {
+    const error = new Error("No se encontro el logo del certificado");
+    error.statusCode = 500;
+    throw error;
+  }
+
   const svg = fs.readFileSync(logoPath, "utf8");
   cachedLogoDataUri = `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
   return cachedLogoDataUri;
