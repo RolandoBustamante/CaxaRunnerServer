@@ -20,6 +20,7 @@ const DEFAULT_CATEGORIES = [
   { name: "Master C", minAge: 60, maxAge: null },
 ];
 let cachedLogoDataUri = null;
+let cachedWatermarkDataUri = null;
 
 app.use(cors());
 app.use(express.json());
@@ -221,30 +222,72 @@ function getCertificateFileName(certificate) {
   return `certificado-${safeName || "finisher"}-${String(certificate.dorsal || "").toLowerCase()}.pdf`;
 }
 
-function getLogoDataUri() {
-  if (cachedLogoDataUri) return cachedLogoDataUri;
+function getCertificateImageFileName(certificate) {
+  const safeName = String(certificate.name || "finisher")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .toLowerCase();
+  return `certificado-${safeName || "finisher"}-${String(certificate.dorsal || "").toLowerCase()}.png`;
+}
 
-  const logoCandidates = [
-    process.env.CERTIFICATE_LOGO_PATH,
-    path.join(__dirname, "assets", "crlogo-horizontal.svg"),
-    path.join(__dirname, "..", "client", "public", "crlogo-horizontal.svg"),
-  ].filter(Boolean);
+function fileToDataUri(filePath) {
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeType = ext === ".svg"
+    ? "image/svg+xml"
+    : ext === ".png"
+      ? "image/png"
+      : ext === ".jpg" || ext === ".jpeg"
+        ? "image/jpeg"
+        : "application/octet-stream";
+  const fileBuffer = fs.readFileSync(filePath);
+  return `data:${mimeType};base64,${fileBuffer.toString("base64")}`;
+}
 
-  const logoPath = logoCandidates.find((candidate) => fs.existsSync(candidate));
-  if (!logoPath) {
-    const error = new Error("No se encontro el logo del certificado");
+function resolveExistingAsset(candidates, errorMessage) {
+  const assetPath = candidates.find((candidate) => fs.existsSync(candidate));
+  if (!assetPath) {
+    const error = new Error(errorMessage);
     error.statusCode = 500;
     throw error;
   }
+  return assetPath;
+}
 
-  const svg = fs.readFileSync(logoPath, "utf8");
-  cachedLogoDataUri = `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
+function getLogoDataUri() {
+  if (cachedLogoDataUri) return cachedLogoDataUri;
+
+  const logoPath = resolveExistingAsset([
+    process.env.CERTIFICATE_LOGO_PATH,
+    path.join(__dirname, "assets", "crlogo-horizontal.svg"),
+    path.join(__dirname, "..", "client", "public", "crlogo-horizontal.svg"),
+  ].filter(Boolean), "No se encontro el logo del certificado");
+
+  cachedLogoDataUri = fileToDataUri(logoPath);
   return cachedLogoDataUri;
+}
+
+function getWatermarkDataUri() {
+  if (cachedWatermarkDataUri) return cachedWatermarkDataUri;
+
+  const watermarkPath = resolveExistingAsset([
+    process.env.CERTIFICATE_WATERMARK_PATH,
+    path.join(__dirname, "assets", "Cajamarcar Runners Logo sin fondo-01.png"),
+    path.join(__dirname, "..", "client", "public", "Cajamarcar Runners Logo sin fondo-01.png"),
+    process.env.CERTIFICATE_LOGO_PATH,
+    path.join(__dirname, "assets", "crlogo-horizontal.svg"),
+    path.join(__dirname, "..", "client", "public", "crlogo-horizontal.svg"),
+  ].filter(Boolean), "No se encontro la marca de agua del certificado");
+
+  cachedWatermarkDataUri = fileToDataUri(watermarkPath);
+  return cachedWatermarkDataUri;
 }
 
 function buildCertificateHtmlDocument(race, certificate) {
   const eventDate = formatDateEs(race?.eventDate);
   const logoDataUri = getLogoDataUri();
+  const watermarkDataUri = getWatermarkDataUri();
 
   return `<!doctype html>
   <html lang="es">
@@ -313,12 +356,12 @@ function buildCertificateHtmlDocument(race, certificate) {
           z-index: 1;
         }
         .watermark img {
-          width: 68%;
-          max-width: 720px;
+          width: 58%;
+          max-width: 640px;
           height: auto;
-          opacity: 0.06;
-          filter: brightness(0) invert(1);
-          transform: rotate(-12deg);
+          opacity: 0.08;
+          filter: none;
+          transform: none;
         }
         .content {
           position: relative;
@@ -455,7 +498,7 @@ function buildCertificateHtmlDocument(race, certificate) {
     <body>
       <div class="page">
         <div class="watermark">
-          <img src="${logoDataUri}" alt="" />
+          <img src="${watermarkDataUri}" alt="" />
         </div>
         <div class="content">
           <div class="header">
@@ -551,6 +594,50 @@ async function renderCertificatePdf(race, certificate) {
     });
   } catch (cause) {
     const error = new Error("No se pudo generar el PDF con Playwright");
+    error.statusCode = 500;
+    error.cause = cause;
+    throw error;
+  } finally {
+    if (browser) {
+      await browser.close();
+    }
+  }
+}
+
+async function renderCertificateImage(race, certificate) {
+  let playwright;
+  try {
+    playwright = require("playwright");
+  } catch {
+    const error = new Error("Playwright no esta instalado en el servidor");
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const launchOptions = {
+    headless: true,
+  };
+  if (process.env.PDF_BROWSER_PATH) {
+    launchOptions.executablePath = process.env.PDF_BROWSER_PATH;
+  }
+
+  let browser;
+  try {
+    browser = await playwright.chromium.launch(launchOptions);
+    const page = await browser.newPage({
+      viewport: { width: 1120, height: 760 },
+      deviceScaleFactor: 1,
+    });
+    await page.setContent(buildCertificateHtmlDocument(race, certificate), {
+      waitUntil: "load",
+    });
+    return await page.screenshot({
+      type: "png",
+      fullPage: false,
+      omitBackground: false,
+    });
+  } catch (cause) {
+    const error = new Error("No se pudo generar la imagen del certificado");
     error.statusCode = 500;
     error.cause = cause;
     throw error;
@@ -751,6 +838,7 @@ app.get("/api/public/:slug/results", async (req, res) => {
           disqualified: finisher.disqualified,
           dqReason: finisher.dqReason ?? null,
           name: participant?.nombre || "-",
+          distance: participant?.distancia || null,
         };
       }),
     });
@@ -909,6 +997,82 @@ app.post("/api/public/:slug/certificate/pdf", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(err.statusCode || 500).json({ error: err.message || "Error al generar certificado PDF" });
+  }
+});
+
+app.post("/api/public/:slug/certificate/image", async (req, res) => {
+  const dorsal = String(req.body?.dorsal || "").trim();
+  const documento = String(req.body?.documento || "").trim();
+
+  if (!dorsal || !documento) {
+    return res.status(400).json({ error: "dorsal y documento requeridos" });
+  }
+
+  try {
+    const race = await resolveRaceBySlug(req.params.slug);
+    if (!race.isOfficial) {
+      return res.status(403).json({ error: "Los certificados aun no estan disponibles" });
+    }
+
+    const [participant, finisher, finishers, participants, categories] = await Promise.all([
+      prisma.participant.findFirst({
+        where: {
+          raceId: race.id,
+          dorsal,
+          documento,
+        },
+      }),
+      prisma.finisher.findUnique({
+        where: {
+          raceId_dorsal: {
+            raceId: race.id,
+            dorsal,
+          },
+        },
+      }),
+      prisma.finisher.findMany({
+        where: { raceId: race.id },
+        orderBy: { position: "asc" },
+      }),
+      prisma.participant.findMany({
+        where: { raceId: race.id },
+      }),
+      getRaceCategories(race),
+    ]);
+
+    if (!participant) {
+      return res.status(403).json({ error: "Documento no valido para este dorsal" });
+    }
+
+    if (!finisher || finisher.disqualified) {
+      return res.status(404).json({ error: "No hay certificado disponible para este dorsal" });
+    }
+
+    const standings = buildCertificateContext({
+      finishers,
+      participants,
+      categories,
+      dorsal,
+    });
+    const certificate = {
+      dorsal: finisher.dorsal,
+      position: standings?.overallPosition ?? finisher.position,
+      timeMs: Number(finisher.elapsedMs) / 1000,
+      name: participant.nombre,
+      distance: participant.distancia,
+      genderPosition: standings?.genderPosition ?? null,
+      categoryName: standings?.categoryName ?? null,
+      categoryPosition: standings?.categoryPosition ?? null,
+      certificateCode: `CR-${race.id}-${finisher.id}-${normalizeText(finisher.dorsal)}`,
+    };
+
+    const imageBuffer = await renderCertificateImage(race, certificate);
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Content-Disposition", `attachment; filename="${getCertificateImageFileName(certificate)}"`);
+    res.send(imageBuffer);
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al generar imagen del certificado" });
   }
 });
 
