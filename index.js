@@ -272,9 +272,9 @@ function getWatermarkDataUri() {
   if (cachedWatermarkDataUri) return cachedWatermarkDataUri;
 
   const watermarkPath = resolveExistingAsset([
-    process.env.CERTIFICATE_WATERMARK_PATH,
     path.join(__dirname, "assets", "Cajamarcar Runners Logo sin fondo-01.png"),
     path.join(__dirname, "..", "client", "public", "Cajamarcar Runners Logo sin fondo-01.png"),
+    process.env.CERTIFICATE_WATERMARK_PATH,
     process.env.CERTIFICATE_LOGO_PATH,
     path.join(__dirname, "assets", "crlogo-horizontal.svg"),
     path.join(__dirname, "..", "client", "public", "crlogo-horizontal.svg"),
