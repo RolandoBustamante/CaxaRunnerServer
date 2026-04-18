@@ -1184,6 +1184,96 @@ app.post("/api/participants", async (req, res) => {
   }
 });
 
+app.post("/api/participants/dorsals", async (req, res) => {
+  const { assignments, raceId } = req.body;
+  if (!Array.isArray(assignments) || assignments.length === 0) {
+    return res.status(400).json({ error: "assignments debe ser un array no vacio" });
+  }
+
+  try {
+    const race = await resolveRace({ ...req, body: { raceId } });
+    const normalizedAssignments = assignments.map((item, index) => ({
+      row: index + 2,
+      documento: String(item?.documento || "").trim(),
+      dorsal: String(item?.dorsal || "").trim(),
+    }));
+
+    const invalid = normalizedAssignments.filter((item) => !item.documento || !item.dorsal);
+    const seenDocuments = new Set();
+    const duplicatesInFile = [];
+    for (const item of normalizedAssignments) {
+      const key = item.documento;
+      if (!key) continue;
+      if (seenDocuments.has(key)) {
+        duplicatesInFile.push(item);
+      } else {
+        seenDocuments.add(key);
+      }
+    }
+
+    if (invalid.length > 0 || duplicatesInFile.length > 0) {
+      return res.status(400).json({
+        error: "El archivo tiene filas invalidas o documentos repetidos",
+        invalidRows: invalid,
+        duplicateDocuments: duplicatesInFile.map((item) => item.documento),
+      });
+    }
+
+    const participants = await prisma.participant.findMany({
+      where: {
+        raceId: race.id,
+        documento: { in: normalizedAssignments.map((item) => item.documento) },
+      },
+      select: { id: true, documento: true, dorsal: true },
+    });
+
+    const participantByDocument = new Map(
+      participants.map((participant) => [String(participant.documento).trim(), participant])
+    );
+
+    const updated = [];
+    const notFound = [];
+    const conflicts = [];
+
+    for (const item of normalizedAssignments) {
+      const participant = participantByDocument.get(item.documento);
+      if (!participant) {
+        notFound.push(item);
+        continue;
+      }
+
+      try {
+        const updatedParticipant = await prisma.participant.update({
+          where: { id: participant.id },
+          data: { dorsal: item.dorsal },
+          select: { id: true, documento: true, dorsal: true, nombre: true },
+        });
+        updated.push(updatedParticipant);
+      } catch (err) {
+        if (err.code === "P2002") {
+          conflicts.push(item);
+          continue;
+        }
+        throw err;
+      }
+    }
+
+    res.json({
+      success: true,
+      raceId: race.id,
+      updatedCount: updated.length,
+      notFoundCount: notFound.length,
+      conflictCount: conflicts.length,
+      updated,
+      notFound,
+      conflicts,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al actualizar dorsales" });
+  }
+});
+
 app.get("/api/participants/search", async (req, res) => {
   const q = String(req.query.q || "").trim();
   if (!q) return res.json([]);
