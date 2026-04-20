@@ -137,6 +137,7 @@ function serializeRace(race) {
     slug: race.slug,
     name: race.name,
     eventDate: race.eventDate,
+    publicNotice: race.publicNotice ?? null,
     status: race.status,
     isOfficial: race.isOfficial,
     raceStarted: race.started,
@@ -1123,7 +1124,7 @@ app.post("/api/races", async (req, res) => {
     return res.status(403).json({ error: "Sin permisos" });
   }
 
-  const { name, slug, eventDate, categories, distances } = req.body;
+  const { name, slug, eventDate, categories, distances, publicNotice } = req.body;
   if (!name || !String(name).trim()) {
     return res.status(400).json({ error: "name requerido" });
   }
@@ -1141,6 +1142,7 @@ app.post("/api/races", async (req, res) => {
         name: String(name).trim(),
         slug: finalSlug,
         eventDate: parseEventDate(eventDate),
+        publicNotice: publicNotice == null ? null : String(publicNotice).trim() || null,
         categories: categories ?? DEFAULT_CATEGORIES,
         distances: distances ?? null,
         status: "DRAFT",
@@ -1288,6 +1290,12 @@ app.put("/api/races/:raceId", async (req, res) => {
 
     if (Object.prototype.hasOwnProperty.call(req.body || {}, "eventDate")) {
       data.eventDate = parseEventDate(req.body.eventDate);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "publicNotice")) {
+      data.publicNotice = req.body.publicNotice == null
+        ? null
+        : String(req.body.publicNotice).trim() || null;
     }
 
     const updated = await prisma.race.update({

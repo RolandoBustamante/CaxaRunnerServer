@@ -13,6 +13,7 @@ model Race {
   slug       String    @unique
   name       String
   eventDate  DateTime? @map("event_date")
+  publicNotice String? @map("public_notice")
   status     String    @default("DRAFT")
   isOfficial Boolean   @default(false) @map("is_official")
   started    Boolean   @default(false)
