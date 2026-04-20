@@ -540,7 +540,7 @@ function buildCertificateHtmlDocument(race, certificate) {
           <div class="secondary-meta">
             <span><strong>Puesto por sexo:</strong> ${escapeHtml(certificate.genderPosition ?? "-")}</span>
             <span><strong>Categoria:</strong> ${escapeHtml(certificate.categoryName ?? "-")}</span>
-            <span><strong>Puesto en categoria:</strong> ${escapeHtml(certificate.categoryPosition ?? "-")}</span>
+            <span><strong>Puesto en categoria sin absolutos:</strong> ${escapeHtml(certificate.categoryPosition ?? "-")}</span>
           </div>
 
           <div class="footer">
@@ -723,7 +723,9 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
 
   const distanceCounters = new Map();
   const genderCounters = new Map();
+  const absoluteGenderCounters = new Map();
   const categoryCounters = new Map();
+  const awardCategoryCounters = new Map();
   const standings = new Map();
 
   activeFinishers.forEach((finisher, index) => {
@@ -739,20 +741,34 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
     const genderPosition = genderKey
       ? (genderCounters.get(genderKey) || 0) + 1
       : null;
-    const categoryPosition = categoryKey
+    const officialCategoryPosition = categoryKey
       ? (categoryCounters.get(categoryKey) || 0) + 1
+      : null;
+    const isAbsoluteWinner = genderKey
+      ? (absoluteGenderCounters.get(genderKey) || 0) < 3
+      : false;
+    const awardCategoryPosition = categoryKey && !isAbsoluteWinner
+      ? (awardCategoryCounters.get(categoryKey) || 0) + 1
       : null;
 
     if (distanceKey) distanceCounters.set(distanceKey, distanceOverallPosition);
     if (genderKey) genderCounters.set(genderKey, genderPosition);
-    if (categoryKey) categoryCounters.set(categoryKey, categoryPosition);
+    if (genderKey && isAbsoluteWinner) {
+      absoluteGenderCounters.set(genderKey, (absoluteGenderCounters.get(genderKey) || 0) + 1);
+    }
+    if (categoryKey) categoryCounters.set(categoryKey, officialCategoryPosition);
+    if (categoryKey && awardCategoryPosition != null) {
+      awardCategoryCounters.set(categoryKey, awardCategoryPosition);
+    }
 
     standings.set(normalizeText(finisher.dorsal), {
       overallPosition: index + 1,
       distanceOverallPosition: distanceOverallPosition ?? index + 1,
       genderPosition,
-      categoryPosition,
+      categoryPosition: awardCategoryPosition,
+      officialCategoryPosition,
       categoryName: meta.ageCategoryName,
+      isAbsoluteWinner,
     });
   });
 
