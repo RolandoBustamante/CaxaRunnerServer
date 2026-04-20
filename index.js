@@ -518,7 +518,7 @@ function buildCertificateHtmlDocument(race, certificate) {
           <div class="name">${escapeHtml(certificate.name)}</div>
           <div class="summary">
             Concluyo oficialmente la distancia de <strong>${escapeHtml(certificate.distance)}</strong>,
-            ocupando el puesto <strong>${escapeHtml(certificate.position)}</strong> del orden general,
+            ocupando el puesto <strong>${escapeHtml(certificate.position)}</strong> en la clasificacion general de su distancia,
             con un tiempo oficial de <strong>${escapeHtml(formatCertificateTime(certificate.timeMs))}</strong>.
           </div>
 
@@ -529,7 +529,7 @@ function buildCertificateHtmlDocument(race, certificate) {
             </div>
             <div class="metric">
               <div class="metric-value">${escapeHtml(certificate.position)}</div>
-              <div class="metric-label">Puesto general</div>
+              <div class="metric-label">Puesto general por distancia</div>
             </div>
             <div class="metric">
               <div class="metric-value">${escapeHtml(certificate.dorsal)}</div>
@@ -719,6 +719,7 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
       return Number(a.timestamp) - Number(b.timestamp);
     });
 
+  const distanceCounters = new Map();
   const genderCounters = new Map();
   const categoryCounters = new Map();
   const standings = new Map();
@@ -726,9 +727,13 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
   activeFinishers.forEach((finisher, index) => {
     const participant = participantMap.get(normalizeText(finisher.dorsal));
     const meta = getParticipantCategoryMeta(participant, categories);
+    const distanceKey = meta.distance || null;
     const genderKey = [meta.distance, meta.gender].filter(Boolean).join("::");
     const categoryKey = meta.categoryKey;
 
+    const distanceOverallPosition = distanceKey
+      ? (distanceCounters.get(distanceKey) || 0) + 1
+      : null;
     const genderPosition = genderKey
       ? (genderCounters.get(genderKey) || 0) + 1
       : null;
@@ -736,11 +741,13 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
       ? (categoryCounters.get(categoryKey) || 0) + 1
       : null;
 
+    if (distanceKey) distanceCounters.set(distanceKey, distanceOverallPosition);
     if (genderKey) genderCounters.set(genderKey, genderPosition);
     if (categoryKey) categoryCounters.set(categoryKey, categoryPosition);
 
     standings.set(normalizeText(finisher.dorsal), {
       overallPosition: index + 1,
+      distanceOverallPosition: distanceOverallPosition ?? index + 1,
       genderPosition,
       categoryPosition,
       categoryName: meta.ageCategoryName,
@@ -929,7 +936,7 @@ app.post("/api/public/:slug/certificate", async (req, res) => {
       race: serializeRace(race),
       certificate: {
         dorsal: finisher.dorsal,
-        position: standings?.overallPosition ?? finisher.position,
+        position: standings?.distanceOverallPosition ?? standings?.overallPosition ?? finisher.position,
         timeMs: Number(finisher.elapsedMs) / 1000,
         name: participant.nombre,
         distance: participant.distancia,
@@ -1001,7 +1008,7 @@ app.post("/api/public/:slug/certificate/pdf", async (req, res) => {
     });
     const certificate = {
       dorsal: finisher.dorsal,
-      position: standings?.overallPosition ?? finisher.position,
+      position: standings?.distanceOverallPosition ?? standings?.overallPosition ?? finisher.position,
       timeMs: Number(finisher.elapsedMs) / 1000,
       name: participant.nombre,
       distance: participant.distancia,
@@ -1077,7 +1084,7 @@ app.post("/api/public/:slug/certificate/image", async (req, res) => {
     });
     const certificate = {
       dorsal: finisher.dorsal,
-      position: standings?.overallPosition ?? finisher.position,
+      position: standings?.distanceOverallPosition ?? standings?.overallPosition ?? finisher.position,
       timeMs: Number(finisher.elapsedMs) / 1000,
       name: participant.nombre,
       distance: participant.distancia,
