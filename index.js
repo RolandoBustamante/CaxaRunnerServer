@@ -13,11 +13,11 @@ const app = express();
 
 const DEFAULT_RACE_SLUG = "carrera-actual";
 const DEFAULT_CATEGORIES = [
-  { name: "Sub-18", minAge: 0, maxAge: 17 },
-  { name: "Open", minAge: 18, maxAge: 39 },
-  { name: "Master A", minAge: 40, maxAge: 49 },
-  { name: "Master B", minAge: 50, maxAge: 59 },
-  { name: "Master C", minAge: 60, maxAge: null },
+  { name: "Sub-18", minAge: 0, maxAge: 17, distance: null, gender: null },
+  { name: "Open", minAge: 18, maxAge: 39, distance: null, gender: null },
+  { name: "Master A", minAge: 40, maxAge: 49, distance: null, gender: null },
+  { name: "Master B", minAge: 50, maxAge: 59, distance: null, gender: null },
+  { name: "Master C", minAge: 60, maxAge: null, distance: null, gender: null },
 ];
 let cachedLogoDataUri = null;
 let cachedWatermarkDataUri = null;
@@ -660,12 +660,27 @@ function normalizeDistance(value) {
   return normalizeText(value).toUpperCase();
 }
 
-function getAgeCategoryName(age, categories = DEFAULT_CATEGORIES) {
+function normalizeCategoryRule(category) {
+  return {
+    ...category,
+    distance: normalizeDistance(category?.distance),
+    gender: normalizeGender(category?.gender),
+  };
+}
+
+function getAgeCategoryName(age, distance, gender, categories = DEFAULT_CATEGORIES) {
   const parsedAge = Number.parseInt(age, 10);
   if (Number.isNaN(parsedAge)) return null;
 
-  for (const category of categories) {
-    if (parsedAge >= category.minAge && (category.maxAge == null || parsedAge <= category.maxAge)) {
+  const normalizedDistance = normalizeDistance(distance);
+  const normalizedGender = normalizeGender(gender);
+
+  for (const category of categories.map(normalizeCategoryRule)) {
+    const distanceMatches = !category.distance || category.distance === normalizedDistance;
+    const genderMatches = !category.gender || category.gender === normalizedGender;
+    const ageMatches = parsedAge >= category.minAge && (category.maxAge == null || parsedAge <= category.maxAge);
+
+    if (distanceMatches && genderMatches && ageMatches) {
       return category.name;
     }
   }
@@ -674,7 +689,12 @@ function getAgeCategoryName(age, categories = DEFAULT_CATEGORIES) {
 }
 
 function getParticipantCategoryMeta(participant, categories = DEFAULT_CATEGORIES) {
-  const ageCategoryName = getAgeCategoryName(participant?.edad, categories);
+  const ageCategoryName = getAgeCategoryName(
+    participant?.edad,
+    participant?.distancia,
+    participant?.genero,
+    categories
+  );
   return {
     distance: normalizeDistance(participant?.distancia),
     gender: normalizeGender(participant?.genero),
