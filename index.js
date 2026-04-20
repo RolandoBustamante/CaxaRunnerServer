@@ -714,9 +714,11 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
     .filter((finisher) => !finisher.disqualified)
     .slice()
     .sort((a, b) => {
-      const elapsedDiff = Number(a.elapsedMs) - Number(b.elapsedMs);
+      const positionDiff = Number(a.position || 0) - Number(b.position || 0);
+      if (positionDiff !== 0) return positionDiff;
+      const elapsedDiff = Number(a.elapsedMs || 0) - Number(b.elapsedMs || 0);
       if (elapsedDiff !== 0) return elapsedDiff;
-      return Number(a.timestamp) - Number(b.timestamp);
+      return Number(a.timestamp || 0) - Number(b.timestamp || 0);
     });
 
   const distanceCounters = new Map();
@@ -908,7 +910,7 @@ app.post("/api/public/:slug/certificate", async (req, res) => {
       }),
       prisma.finisher.findMany({
         where: { raceId: race.id },
-        orderBy: [{ elapsedMs: "asc" }, { timestamp: "asc" }],
+        orderBy: { position: "asc" },
       }),
       prisma.participant.findMany({
         where: { raceId: race.id },
@@ -984,7 +986,7 @@ app.post("/api/public/:slug/certificate/pdf", async (req, res) => {
       }),
       prisma.finisher.findMany({
         where: { raceId: race.id },
-        orderBy: [{ elapsedMs: "asc" }, { timestamp: "asc" }],
+        orderBy: { position: "asc" },
       }),
       prisma.participant.findMany({
         where: { raceId: race.id },
