@@ -163,6 +163,21 @@ function serializeFinisher(finisher) {
   };
 }
 
+function advanceCompetitionRank(state, sourcePosition) {
+  const next = state || { seen: 0, lastSourcePosition: null, currentRank: 0 };
+  next.seen += 1;
+
+  if (next.lastSourcePosition !== sourcePosition) {
+    next.currentRank = next.seen;
+    next.lastSourcePosition = sourcePosition;
+  }
+
+  return {
+    state: next,
+    rank: next.currentRank,
+  };
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -734,31 +749,35 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
     const distanceKey = meta.distance || null;
     const genderKey = [meta.distance, meta.gender].filter(Boolean).join("::");
     const categoryKey = meta.categoryKey;
-
-    const distanceOverallPosition = distanceKey
-      ? (distanceCounters.get(distanceKey) || 0) + 1
+    const sourcePosition = Number(finisher.position || index + 1);
+    const distanceRankResult = distanceKey
+      ? advanceCompetitionRank(distanceCounters.get(distanceKey), sourcePosition)
       : null;
-    const genderPosition = genderKey
-      ? (genderCounters.get(genderKey) || 0) + 1
+    const genderRankResult = genderKey
+      ? advanceCompetitionRank(genderCounters.get(genderKey), sourcePosition)
       : null;
-    const officialCategoryPosition = categoryKey
-      ? (categoryCounters.get(categoryKey) || 0) + 1
+    const categoryRankResult = categoryKey
+      ? advanceCompetitionRank(categoryCounters.get(categoryKey), sourcePosition)
       : null;
+    const distanceOverallPosition = distanceRankResult?.rank ?? null;
+    const genderPosition = genderRankResult?.rank ?? null;
+    const officialCategoryPosition = categoryRankResult?.rank ?? null;
     const isAbsoluteWinner = genderKey
       ? (absoluteGenderCounters.get(genderKey) || 0) < 3
       : false;
-    const awardCategoryPosition = categoryKey && !isAbsoluteWinner
-      ? (awardCategoryCounters.get(categoryKey) || 0) + 1
+    const awardCategoryRankResult = categoryKey && !isAbsoluteWinner
+      ? advanceCompetitionRank(awardCategoryCounters.get(categoryKey), sourcePosition)
       : null;
+    const awardCategoryPosition = awardCategoryRankResult?.rank ?? null;
 
-    if (distanceKey) distanceCounters.set(distanceKey, distanceOverallPosition);
-    if (genderKey) genderCounters.set(genderKey, genderPosition);
+    if (distanceKey) distanceCounters.set(distanceKey, distanceRankResult.state);
+    if (genderKey) genderCounters.set(genderKey, genderRankResult.state);
     if (genderKey && isAbsoluteWinner) {
       absoluteGenderCounters.set(genderKey, (absoluteGenderCounters.get(genderKey) || 0) + 1);
     }
-    if (categoryKey) categoryCounters.set(categoryKey, officialCategoryPosition);
-    if (categoryKey && awardCategoryPosition != null) {
-      awardCategoryCounters.set(categoryKey, awardCategoryPosition);
+    if (categoryKey) categoryCounters.set(categoryKey, categoryRankResult.state);
+    if (categoryKey && awardCategoryRankResult) {
+      awardCategoryCounters.set(categoryKey, awardCategoryRankResult.state);
     }
 
     standings.set(normalizeText(finisher.dorsal), {
@@ -1740,7 +1759,11 @@ app.put("/api/finishers/reorder", async (req, res) => {
               dorsal: String(finisher.dorsal).trim(),
             },
           },
-          data: { position: index + 1 },
+          data: {
+            position: Number.isInteger(Number(finisher?.position)) && Number(finisher.position) > 0
+              ? Number(finisher.position)
+              : index + 1,
+          },
         })
       )
     );
@@ -1748,6 +1771,34 @@ app.put("/api/finishers/reorder", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(err.statusCode || 500).json({ error: err.message || "Error al reordenar" });
+  }
+});
+
+app.put("/api/finishers/:dorsal/position", async (req, res) => {
+  const { dorsal } = req.params;
+  const parsedPosition = Number.parseInt(req.body?.position, 10);
+  if (!Number.isInteger(parsedPosition) || parsedPosition <= 0) {
+    return res.status(400).json({ error: "position invalido" });
+  }
+
+  try {
+    const race = await resolveRace(req);
+    const existing = await prisma.finisher.findUnique({
+      where: { raceId_dorsal: { raceId: race.id, dorsal } },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "Finisher no encontrado" });
+    }
+
+    const finisher = await prisma.finisher.update({
+      where: { id: existing.id },
+      data: { position: parsedPosition },
+    });
+
+    res.json({ success: true, finisher: serializeFinisher(finisher) });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al actualizar puesto" });
   }
 });
 
