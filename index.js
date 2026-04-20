@@ -509,16 +509,16 @@ function buildCertificateHtmlDocument(race, certificate) {
             </div>
             <div class="seal">
               <div class="seal-title">Certificado de Finisher</div>
-              <div class="seal-sub">Comite organizador</div>
+              <div class="seal-sub">Comité organizador</div>
             </div>
           </div>
 
           <h1 class="title">CERTIFICADO</h1>
-          <p class="subtitle">El comite organizador certifica que el corredor(a) concluyo oficialmente la prueba.</p>
+          <p class="subtitle">El comité organizador certifica que el corredor(a) concluyó oficialmente la prueba.</p>
           <div class="name">${escapeHtml(certificate.name)}</div>
           <div class="summary">
-            Concluyo oficialmente la distancia de <strong>${escapeHtml(certificate.distance)}</strong>,
-            ocupando el puesto <strong>${escapeHtml(certificate.position)}</strong> en la clasificacion general de su distancia,
+            Concluyó oficialmente la distancia de <strong>${escapeHtml(certificate.distance)}</strong>,
+            ocupando el puesto <strong>${escapeHtml(certificate.position)}</strong> en la clasificación general de su distancia,
             con un tiempo oficial de <strong>${escapeHtml(formatCertificateTime(certificate.timeMs))}</strong>.
           </div>
 
@@ -538,9 +538,9 @@ function buildCertificateHtmlDocument(race, certificate) {
           </div>
 
           <div class="secondary-meta">
-            <span><strong>Puesto por genero:</strong> ${escapeHtml(certificate.genderPosition ?? "-")}</span>
-            <span><strong>Categoria:</strong> ${escapeHtml(certificate.categoryName ?? "-")}</span>
-            <span><strong>Puesto en categoria:</strong> ${escapeHtml(certificate.categoryPosition ?? "-")}</span>
+            <span><strong>Puesto por género:</strong> ${escapeHtml(certificate.genderPosition ?? "-")}</span>
+            <span><strong>Categoría:</strong> ${escapeHtml(certificate.categoryName ?? "-")}</span>
+            <span><strong>Puesto en categoría:</strong> ${escapeHtml(certificate.categoryPosition ?? "-")}</span>
           </div>
 
           <div class="footer">
