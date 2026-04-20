@@ -540,7 +540,7 @@ function buildCertificateHtmlDocument(race, certificate) {
           <div class="secondary-meta">
             <span><strong>Puesto por sexo:</strong> ${escapeHtml(certificate.genderPosition ?? "-")}</span>
             <span><strong>Categoria:</strong> ${escapeHtml(certificate.categoryName ?? "-")}</span>
-            <span><strong>Puesto en categoria sin absolutos:</strong> ${escapeHtml(certificate.categoryPosition ?? "-")}</span>
+            <span><strong>Puesto en categoria:</strong> ${escapeHtml(certificate.categoryPosition ?? "-")}</span>
           </div>
 
           <div class="footer">
