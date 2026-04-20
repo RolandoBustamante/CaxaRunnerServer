@@ -738,7 +738,6 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
 
   const distanceCounters = new Map();
   const genderCounters = new Map();
-  const absoluteGenderCounters = new Map();
   const categoryCounters = new Map();
   const awardCategoryCounters = new Map();
   const standings = new Map();
@@ -762,9 +761,7 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
     const distanceOverallPosition = distanceRankResult?.rank ?? null;
     const genderPosition = genderRankResult?.rank ?? null;
     const officialCategoryPosition = categoryRankResult?.rank ?? null;
-    const isAbsoluteWinner = genderKey
-      ? (absoluteGenderCounters.get(genderKey) || 0) < 3
-      : false;
+    const isAbsoluteWinner = genderPosition != null && genderPosition <= 3;
     const awardCategoryRankResult = categoryKey && !isAbsoluteWinner
       ? advanceCompetitionRank(awardCategoryCounters.get(categoryKey), sourcePosition)
       : null;
@@ -772,9 +769,6 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
 
     if (distanceKey) distanceCounters.set(distanceKey, distanceRankResult.state);
     if (genderKey) genderCounters.set(genderKey, genderRankResult.state);
-    if (genderKey && isAbsoluteWinner) {
-      absoluteGenderCounters.set(genderKey, (absoluteGenderCounters.get(genderKey) || 0) + 1);
-    }
     if (categoryKey) categoryCounters.set(categoryKey, categoryRankResult.state);
     if (categoryKey && awardCategoryRankResult) {
       awardCategoryCounters.set(categoryKey, awardCategoryRankResult.state);
