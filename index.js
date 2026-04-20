@@ -765,7 +765,7 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
       overallPosition: index + 1,
       distanceOverallPosition: distanceOverallPosition ?? index + 1,
       genderPosition,
-      categoryPosition: awardCategoryPosition,
+      categoryPosition: awardCategoryPosition ?? officialCategoryPosition,
       officialCategoryPosition,
       categoryName: meta.ageCategoryName,
       isAbsoluteWinner,
