@@ -19,6 +19,7 @@ const DEFAULT_CATEGORIES = [
   { name: "Master B", minAge: 50, maxAge: 59, distance: null, gender: null },
   { name: "Master C", minAge: 60, maxAge: null, distance: null, gender: null },
 ];
+const NO_TIME_REASON = "__NO_TIME__";
 let cachedLogoDataUri = null;
 let cachedWatermarkDataUri = null;
 
@@ -150,14 +151,17 @@ function serializeRace(race) {
 }
 
 function serializeFinisher(finisher) {
+  const noTime = finisher.disqualified && finisher.dqReason === NO_TIME_REASON;
   return {
     id: finisher.id,
     dorsal: finisher.dorsal,
     position: finisher.position,
     timestamp: Number(finisher.timestamp),
     elapsedMs: Number(finisher.elapsedMs) / 1000,
-    disqualified: finisher.disqualified,
-    dqReason: finisher.dqReason ?? null,
+    disqualified: finisher.disqualified && !noTime,
+    dqReason: noTime ? null : finisher.dqReason ?? null,
+    noTime,
+    noTimeReason: noTime ? "Sin tiempo" : null,
     raceId: finisher.raceId,
     isTestData: finisher.isTestData,
   };
@@ -176,6 +180,10 @@ function advanceCompetitionRank(state, sourcePosition) {
     state: next,
     rank: next.currentRank,
   };
+}
+
+function isNoTimeFinisher(finisher) {
+  return Boolean(finisher?.disqualified && finisher?.dqReason === NO_TIME_REASON);
 }
 
 function escapeHtml(value) {
@@ -726,7 +734,7 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
     participants.map((participant) => [normalizeText(participant.dorsal), participant])
   );
   const activeFinishers = finishers
-    .filter((finisher) => !finisher.disqualified)
+    .filter((finisher) => !finisher.disqualified && !isNoTimeFinisher(finisher))
     .slice()
     .sort((a, b) => {
       const positionDiff = Number(a.position || 0) - Number(b.position || 0);
@@ -814,19 +822,19 @@ app.get("/api/public", async (req, res) => {
   try {
     const race = await resolveRace(req, { allowBody: false });
     const finishers = await prisma.finisher.findMany({
-      where: { raceId: race.id },
+      where: { raceId: race.id, NOT: { dqReason: NO_TIME_REASON } },
       orderBy: { position: "asc" },
       take: 10,
     });
     const recentFinishers = await prisma.finisher.findMany({
-      where: { raceId: race.id },
+      where: { raceId: race.id, NOT: { dqReason: NO_TIME_REASON } },
       orderBy: { position: "desc" },
       take: 10,
     });
     res.json({
       serverNow: Date.now(),
       ...serializeRace(race),
-      finishersCount: await prisma.finisher.count({ where: { raceId: race.id } }),
+      finishersCount: await prisma.finisher.count({ where: { raceId: race.id, NOT: { dqReason: NO_TIME_REASON } } }),
       topFinishers: finishers.map(serializeFinisher),
       recentFinishers: recentFinishers.map(serializeFinisher),
     });
@@ -840,12 +848,12 @@ app.get("/api/public/:slug", async (req, res) => {
   try {
     const race = await resolveRaceBySlug(req.params.slug);
     const topFinishers = await prisma.finisher.findMany({
-      where: { raceId: race.id },
+      where: { raceId: race.id, NOT: { dqReason: NO_TIME_REASON } },
       orderBy: { position: "asc" },
       take: 10,
     });
     const recentFinishers = await prisma.finisher.findMany({
-      where: { raceId: race.id },
+      where: { raceId: race.id, NOT: { dqReason: NO_TIME_REASON } },
       orderBy: { position: "desc" },
       take: 10,
     });
@@ -853,7 +861,7 @@ app.get("/api/public/:slug", async (req, res) => {
     res.json({
       serverNow: Date.now(),
       ...serializeRace(race),
-      finishersCount: await prisma.finisher.count({ where: { raceId: race.id } }),
+      finishersCount: await prisma.finisher.count({ where: { raceId: race.id, NOT: { dqReason: NO_TIME_REASON } } }),
       topFinishers: topFinishers.map(serializeFinisher),
       recentFinishers: recentFinishers.map(serializeFinisher),
     });
@@ -872,7 +880,7 @@ app.get("/api/public/:slug/results", async (req, res) => {
 
     const [finishers, participants] = await Promise.all([
       prisma.finisher.findMany({
-        where: { raceId: race.id },
+        where: { raceId: race.id, NOT: { dqReason: NO_TIME_REASON } },
         orderBy: [{ disqualified: "asc" }, { position: "asc" }],
       }),
       prisma.participant.findMany({
@@ -951,7 +959,7 @@ app.post("/api/public/:slug/certificate", async (req, res) => {
       return res.status(403).json({ error: "Documento no valido para este dorsal" });
     }
 
-    if (!finisher || finisher.disqualified) {
+    if (!finisher || finisher.disqualified || isNoTimeFinisher(finisher)) {
       return res.status(404).json({ error: "No hay certificado disponible para este dorsal" });
     }
 
@@ -1027,7 +1035,7 @@ app.post("/api/public/:slug/certificate/pdf", async (req, res) => {
       return res.status(403).json({ error: "Documento no valido para este dorsal" });
     }
 
-    if (!finisher || finisher.disqualified) {
+    if (!finisher || finisher.disqualified || isNoTimeFinisher(finisher)) {
       return res.status(404).json({ error: "No hay certificado disponible para este dorsal" });
     }
 
@@ -1103,7 +1111,7 @@ app.post("/api/public/:slug/certificate/image", async (req, res) => {
       return res.status(403).json({ error: "Documento no valido para este dorsal" });
     }
 
-    if (!finisher || finisher.disqualified) {
+    if (!finisher || finisher.disqualified || isNoTimeFinisher(finisher)) {
       return res.status(404).json({ error: "No hay certificado disponible para este dorsal" });
     }
 
@@ -1733,6 +1741,32 @@ app.post("/api/finishers/:dorsal/disqualify", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(err.statusCode || 500).json({ error: err.message || "Error al actualizar descalificacion" });
+  }
+});
+
+app.post("/api/finishers/:dorsal/no-time", async (req, res) => {
+  const { dorsal } = req.params;
+  const { noTime } = req.body || {};
+
+  try {
+    const race = await resolveRace(req);
+    const existing = await prisma.finisher.findUnique({
+      where: { raceId_dorsal: { raceId: race.id, dorsal } },
+    });
+    if (!existing) {
+      return res.status(404).json({ error: "Finisher no encontrado" });
+    }
+
+    const finisher = await prisma.finisher.update({
+      where: { id: existing.id },
+      data: noTime
+        ? { disqualified: true, dqReason: NO_TIME_REASON }
+        : { disqualified: false, dqReason: null },
+    });
+    res.json({ success: true, finisher: serializeFinisher(finisher) });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al actualizar estado sin tiempo" });
   }
 });
 
