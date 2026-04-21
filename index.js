@@ -186,6 +186,16 @@ function isNoTimeFinisher(finisher) {
   return Boolean(finisher?.disqualified && finisher?.dqReason === NO_TIME_REASON);
 }
 
+function visibleResultsWhere(raceId) {
+  return {
+    raceId,
+    OR: [
+      { dqReason: null },
+      { dqReason: { not: NO_TIME_REASON } },
+    ],
+  };
+}
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -822,19 +832,19 @@ app.get("/api/public", async (req, res) => {
   try {
     const race = await resolveRace(req, { allowBody: false });
     const finishers = await prisma.finisher.findMany({
-      where: { raceId: race.id, NOT: { dqReason: NO_TIME_REASON } },
+      where: visibleResultsWhere(race.id),
       orderBy: { position: "asc" },
       take: 10,
     });
     const recentFinishers = await prisma.finisher.findMany({
-      where: { raceId: race.id, NOT: { dqReason: NO_TIME_REASON } },
+      where: visibleResultsWhere(race.id),
       orderBy: { position: "desc" },
       take: 10,
     });
     res.json({
       serverNow: Date.now(),
       ...serializeRace(race),
-      finishersCount: await prisma.finisher.count({ where: { raceId: race.id, NOT: { dqReason: NO_TIME_REASON } } }),
+      finishersCount: await prisma.finisher.count({ where: visibleResultsWhere(race.id) }),
       topFinishers: finishers.map(serializeFinisher),
       recentFinishers: recentFinishers.map(serializeFinisher),
     });
@@ -848,12 +858,12 @@ app.get("/api/public/:slug", async (req, res) => {
   try {
     const race = await resolveRaceBySlug(req.params.slug);
     const topFinishers = await prisma.finisher.findMany({
-      where: { raceId: race.id, NOT: { dqReason: NO_TIME_REASON } },
+      where: visibleResultsWhere(race.id),
       orderBy: { position: "asc" },
       take: 10,
     });
     const recentFinishers = await prisma.finisher.findMany({
-      where: { raceId: race.id, NOT: { dqReason: NO_TIME_REASON } },
+      where: visibleResultsWhere(race.id),
       orderBy: { position: "desc" },
       take: 10,
     });
@@ -861,7 +871,7 @@ app.get("/api/public/:slug", async (req, res) => {
     res.json({
       serverNow: Date.now(),
       ...serializeRace(race),
-      finishersCount: await prisma.finisher.count({ where: { raceId: race.id, NOT: { dqReason: NO_TIME_REASON } } }),
+      finishersCount: await prisma.finisher.count({ where: visibleResultsWhere(race.id) }),
       topFinishers: topFinishers.map(serializeFinisher),
       recentFinishers: recentFinishers.map(serializeFinisher),
     });
@@ -880,7 +890,7 @@ app.get("/api/public/:slug/results", async (req, res) => {
 
     const [finishers, participants] = await Promise.all([
       prisma.finisher.findMany({
-        where: { raceId: race.id, NOT: { dqReason: NO_TIME_REASON } },
+        where: visibleResultsWhere(race.id),
         orderBy: [{ disqualified: "asc" }, { position: "asc" }],
       }),
       prisma.participant.findMany({
