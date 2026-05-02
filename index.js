@@ -1447,37 +1447,84 @@ app.post("/api/participants", async (req, res) => {
 
   try {
     const race = await resolveRace({ ...req, body: { raceId } });
+    const normalizedParticipants = participants.map((participant, index) => ({
+      row: index + 1,
+      documento: String(participant.documento ?? "").trim(),
+      nombre: String(participant.nombre ?? "").trim(),
+      edad: Number(participant.edad),
+      genero: String(participant.genero ?? "").trim().toUpperCase(),
+      distancia: String(participant.distancia ?? "").trim().toUpperCase(),
+      dorsal:
+        participant.dorsal !== undefined &&
+        participant.dorsal !== null &&
+        String(participant.dorsal).trim() !== ""
+          ? String(participant.dorsal).trim()
+          : null,
+    }));
+    const participantErrors = [];
+    const dorsalRows = new Map();
+    normalizedParticipants.forEach((participant) => {
+      if (!participant.documento) participantErrors.push(`Fila ${participant.row}: documento vacio`);
+      if (!participant.nombre) participantErrors.push(`Fila ${participant.row}: nombre vacio`);
+      if (!Number.isFinite(participant.edad) || participant.edad <= 0) participantErrors.push(`Fila ${participant.row}: edad invalida`);
+      if (!["M", "F"].includes(participant.genero)) participantErrors.push(`Fila ${participant.row}: genero invalido`);
+      if (!participant.distancia) participantErrors.push(`Fila ${participant.row}: distancia vacia`);
+      if (!participant.dorsal) return;
+      if (!dorsalRows.has(participant.dorsal)) dorsalRows.set(participant.dorsal, []);
+      dorsalRows.get(participant.dorsal).push(participant.row);
+    });
+    dorsalRows.forEach((rows, dorsal) => {
+      if (rows.length > 1) {
+        participantErrors.push(`Dorsal ${dorsal} repetido en filas ${rows.join(", ")}`);
+      }
+    });
+    if (participantErrors.length > 0) {
+      return res.status(400).json({ error: participantErrors.join(". ") });
+    }
+
+    const incomingDocuments = normalizedParticipants.map((participant) => participant.documento);
+    const incomingDorsals = normalizedParticipants.map((participant) => participant.dorsal).filter(Boolean);
+    const existingDorsals = incomingDorsals.length > 0
+      ? await prisma.participant.findMany({
+          where: {
+            raceId: race.id,
+            dorsal: { in: incomingDorsals },
+            documento: { notIn: incomingDocuments },
+          },
+          select: { documento: true, nombre: true, dorsal: true },
+        })
+      : [];
+    if (existingDorsals.length > 0) {
+      const conflicts = existingDorsals
+        .map((participant) => `dorsal ${participant.dorsal} ya asignado a ${participant.nombre} (${participant.documento})`)
+        .join("; ");
+      return res.status(409).json({ error: conflicts });
+    }
+
     const results = await prisma.$transaction(
-      participants.map((participant) =>
+      normalizedParticipants.map((participant) =>
         prisma.participant.upsert({
           where: {
             raceId_documento: {
               raceId: race.id,
-              documento: String(participant.documento).trim(),
+              documento: participant.documento,
             },
           },
           update: {
-            nombre: String(participant.nombre).trim(),
-            edad: Number(participant.edad),
-            genero: String(participant.genero).trim().toUpperCase(),
-            distancia: String(participant.distancia).trim().toUpperCase(),
-            ...(participant.dorsal !== undefined && participant.dorsal !== null && String(participant.dorsal).trim() !== ""
-              ? { dorsal: String(participant.dorsal).trim() }
-              : {}),
+            nombre: participant.nombre,
+            edad: participant.edad,
+            genero: participant.genero,
+            distancia: participant.distancia,
+            ...(participant.dorsal ? { dorsal: participant.dorsal } : {}),
           },
           create: {
             raceId: race.id,
-            documento: String(participant.documento).trim(),
-            nombre: String(participant.nombre).trim(),
-            edad: Number(participant.edad),
-            genero: String(participant.genero).trim().toUpperCase(),
-            distancia: String(participant.distancia).trim().toUpperCase(),
-            dorsal:
-              participant.dorsal !== undefined &&
-              participant.dorsal !== null &&
-              String(participant.dorsal).trim() !== ""
-                ? String(participant.dorsal).trim()
-                : null,
+            documento: participant.documento,
+            nombre: participant.nombre,
+            edad: participant.edad,
+            genero: participant.genero,
+            distancia: participant.distancia,
+            dorsal: participant.dorsal,
           },
         })
       )
