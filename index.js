@@ -38,6 +38,18 @@ function slugify(value) {
     .slice(0, 80);
 }
 
+function normalizeDistances(value) {
+  if (!Array.isArray(value)) return null;
+  const distances = [
+    ...new Set(
+      value
+        .map((distance) => String(distance || "").trim().toUpperCase())
+        .filter(Boolean)
+    ),
+  ];
+  return distances.length > 0 ? distances : null;
+}
+
 async function ensureDefaultRace() {
   return prisma.race.upsert({
     where: { slug: DEFAULT_RACE_SLUG },
@@ -139,6 +151,8 @@ function serializeRace(race) {
     name: race.name,
     eventDate: race.eventDate,
     publicNotice: race.publicNotice ?? null,
+    certificatesEnabled: race.certificatesEnabled,
+    showDorsalPublic: race.showDorsalPublic,
     status: race.status,
     isOfficial: race.isOfficial,
     raceStarted: race.started,
@@ -940,7 +954,8 @@ app.get("/api/public/:slug/results", async (req, res) => {
         const participant = participantMap.get(String(finisher.dorsal).trim()) || null;
         return {
           id: finisher.id,
-          dorsal: finisher.dorsal,
+          dorsal: race.showDorsalPublic ? finisher.dorsal : null,
+          certificateDorsal: race.certificatesEnabled ? finisher.dorsal : null,
           position: finisher.disqualified ? null : finisher.position,
           timeMs: Number(finisher.elapsedMs) / 1000,
           disqualified: finisher.disqualified && !isNoTimeFinisher(finisher),
@@ -967,6 +982,9 @@ app.post("/api/public/:slug/certificate", async (req, res) => {
 
   try {
     const race = await resolveRaceBySlug(req.params.slug);
+    if (!race.certificatesEnabled) {
+      return res.status(403).json({ error: "Certificados no disponibles para esta carrera" });
+    }
     if (!race.isOfficial) {
       return res.status(403).json({ error: "Los certificados aun no estan disponibles" });
     }
@@ -1044,6 +1062,9 @@ app.post("/api/public/:slug/certificate/pdf", async (req, res) => {
 
   try {
     const race = await resolveRaceBySlug(req.params.slug);
+    if (!race.certificatesEnabled) {
+      return res.status(403).json({ error: "Certificados no disponibles para esta carrera" });
+    }
     if (!race.isOfficial) {
       return res.status(403).json({ error: "Los certificados aun no estan disponibles" });
     }
@@ -1121,6 +1142,9 @@ app.post("/api/public/:slug/certificate/image", async (req, res) => {
 
   try {
     const race = await resolveRaceBySlug(req.params.slug);
+    if (!race.certificatesEnabled) {
+      return res.status(403).json({ error: "Certificados no disponibles para esta carrera" });
+    }
     if (!race.isOfficial) {
       return res.status(403).json({ error: "Los certificados aun no estan disponibles" });
     }
@@ -1215,7 +1239,7 @@ app.post("/api/races", async (req, res) => {
     return res.status(403).json({ error: "Sin permisos" });
   }
 
-  const { name, slug, eventDate, categories, distances, publicNotice } = req.body;
+  const { name, slug, eventDate, categories, distances, publicNotice, certificatesEnabled, showDorsalPublic } = req.body;
   if (!name || !String(name).trim()) {
     return res.status(400).json({ error: "name requerido" });
   }
@@ -1234,8 +1258,10 @@ app.post("/api/races", async (req, res) => {
         slug: finalSlug,
         eventDate: parseEventDate(eventDate),
         publicNotice: publicNotice == null ? null : String(publicNotice).trim() || null,
+        certificatesEnabled: certificatesEnabled !== false,
+        showDorsalPublic: showDorsalPublic !== false,
         categories: categories ?? DEFAULT_CATEGORIES,
-        distances: distances ?? null,
+        distances: normalizeDistances(distances),
         status: "DRAFT",
       },
     });
@@ -1387,6 +1413,18 @@ app.put("/api/races/:raceId", async (req, res) => {
       data.publicNotice = req.body.publicNotice == null
         ? null
         : String(req.body.publicNotice).trim() || null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "distances")) {
+      data.distances = normalizeDistances(req.body.distances);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "certificatesEnabled")) {
+      data.certificatesEnabled = Boolean(req.body.certificatesEnabled);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "showDorsalPublic")) {
+      data.showDorsalPublic = Boolean(req.body.showDorsalPublic);
     }
 
     const updated = await prisma.race.update({
@@ -1686,6 +1724,122 @@ app.post("/api/finishers", async (req, res) => {
     }
     console.error(err);
     res.status(500).json({ error: "Error al registrar finisher" });
+  }
+});
+
+app.post("/api/finishers/import", async (req, res) => {
+  const { finishers, raceId, replace } = req.body || {};
+  if (!Array.isArray(finishers) || finishers.length === 0) {
+    return res.status(400).json({ error: "finishers debe ser un array no vacio" });
+  }
+
+  const normalized = [];
+  const seen = new Set();
+  const errors = [];
+
+  finishers.forEach((finisher, index) => {
+    const dorsal = String(finisher?.dorsal || "").trim();
+    const elapsedMs = Number(finisher?.elapsedMs);
+    const position = Number.parseInt(finisher?.position, 10);
+    const rowErrors = [];
+
+    if (!dorsal) rowErrors.push("Dorsal vacio");
+    if (!Number.isFinite(elapsedMs) || elapsedMs < 0) rowErrors.push("Tiempo invalido");
+    if (finisher?.position != null && (!Number.isInteger(position) || position <= 0)) {
+      rowErrors.push("Puesto invalido");
+    }
+    if (dorsal && seen.has(dorsal)) rowErrors.push("Dorsal repetido");
+    if (dorsal) seen.add(dorsal);
+
+    if (rowErrors.length > 0) {
+      errors.push({ row: index + 1, errors: rowErrors });
+      return;
+    }
+
+    normalized.push({
+      dorsal,
+      elapsedMs,
+      position: Number.isInteger(position) && position > 0 ? position : null,
+    });
+  });
+
+  if (errors.length > 0) {
+    return res.status(400).json({ error: "Archivo invalido", details: errors });
+  }
+
+  try {
+    const race = await resolveRace({ ...req, body: { raceId } });
+    const existing = await prisma.finisher.findMany({
+      where: { raceId: race.id },
+      select: { dorsal: true },
+    });
+    const existingDorsals = new Set(existing.map((finisher) => String(finisher.dorsal).trim()));
+    const ordered = normalized
+      .slice()
+      .sort((a, b) => {
+        if (a.position != null && b.position != null) return a.position - b.position;
+        if (a.position != null) return -1;
+        if (b.position != null) return 1;
+        return a.elapsedMs - b.elapsedMs;
+      })
+      .map((finisher, index) => ({
+        ...finisher,
+        position: finisher.position ?? index + 1,
+      }));
+
+    await prisma.$transaction(async (tx) => {
+      if (replace) {
+        await tx.finisher.deleteMany({ where: { raceId: race.id } });
+      }
+
+      for (const finisher of ordered) {
+        const timestamp = race.startTime
+          ? Number(race.startTime) + finisher.elapsedMs
+          : Date.now() + finisher.position;
+        await tx.finisher.upsert({
+          where: {
+            raceId_dorsal: {
+              raceId: race.id,
+              dorsal: finisher.dorsal,
+            },
+          },
+          update: {
+            position: finisher.position,
+            timestamp: BigInt(Math.round(timestamp)),
+            elapsedMs: BigInt(Math.round(finisher.elapsedMs * 1000)),
+            disqualified: false,
+            dqReason: null,
+          },
+          create: {
+            raceId: race.id,
+            dorsal: finisher.dorsal,
+            position: finisher.position,
+            timestamp: BigInt(Math.round(timestamp)),
+            elapsedMs: BigInt(Math.round(finisher.elapsedMs * 1000)),
+          },
+        });
+      }
+    });
+
+    const updatedCount = replace
+      ? 0
+      : ordered.filter((finisher) => existingDorsals.has(finisher.dorsal)).length;
+    const createdCount = replace ? ordered.length : ordered.length - updatedCount;
+
+    res.json({
+      success: true,
+      raceId: race.id,
+      importedCount: ordered.length,
+      updatedCount,
+      createdCount,
+      replaced: Boolean(replace),
+    });
+  } catch (err) {
+    if (err.code === "P2002") {
+      return res.status(409).json({ error: "Hay dorsales duplicados en resultados" });
+    }
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al importar resultados" });
   }
 });
 

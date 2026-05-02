@@ -14,6 +14,8 @@ model Race {
   name       String
   eventDate  DateTime? @map("event_date")
   publicNotice String? @map("public_notice")
+  certificatesEnabled Boolean @default(true) @map("certificates_enabled")
+  showDorsalPublic Boolean @default(true) @map("show_dorsal_public")
   status     String    @default("DRAFT")
   isOfficial Boolean   @default(false) @map("is_official")
   started    Boolean   @default(false)
