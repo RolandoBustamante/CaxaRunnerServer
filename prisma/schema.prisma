@@ -16,6 +16,7 @@ model Race {
   publicNotice String? @map("public_notice")
   certificatesEnabled Boolean @default(true) @map("certificates_enabled")
   showDorsalPublic Boolean @default(true) @map("show_dorsal_public")
+  certificateTemplate String @default("classic") @map("certificate_template")
   status     String    @default("DRAFT")
   isOfficial Boolean   @default(false) @map("is_official")
   started    Boolean   @default(false)

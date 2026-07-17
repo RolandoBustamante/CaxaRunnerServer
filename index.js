@@ -20,8 +20,17 @@ const DEFAULT_CATEGORIES = [
   { name: "Master C", minAge: 60, maxAge: null, distance: null, gender: null },
 ];
 const NO_TIME_REASON = "__NO_TIME__";
+const CERTIFICATE_TEMPLATES = new Set(["classic", "trail"]);
+const DEFAULT_CERTIFICATE_TEMPLATE = "classic";
 let cachedLogoDataUri = null;
 let cachedWatermarkDataUri = null;
+let cachedTrailLogoDataUri = null;
+let cachedTrailCajamarcaLogoDataUri = null;
+
+function normalizeCertificateTemplate(value) {
+  const template = String(value || DEFAULT_CERTIFICATE_TEMPLATE).trim().toLowerCase();
+  return CERTIFICATE_TEMPLATES.has(template) ? template : DEFAULT_CERTIFICATE_TEMPLATE;
+}
 
 app.use(cors());
 app.use(express.json());
@@ -153,6 +162,7 @@ function serializeRace(race) {
     publicNotice: race.publicNotice ?? null,
     certificatesEnabled: race.certificatesEnabled,
     showDorsalPublic: race.showDorsalPublic,
+    certificateTemplate: normalizeCertificateTemplate(race.certificateTemplate),
     status: race.status,
     isOfficial: race.isOfficial,
     raceStarted: race.started,
@@ -332,7 +342,327 @@ function getWatermarkDataUri() {
   return cachedWatermarkDataUri;
 }
 
+function getTrailLogoDataUri() {
+  if (cachedTrailLogoDataUri) return cachedTrailLogoDataUri;
+
+  const logoPath = resolveExistingAsset([
+    process.env.CERTIFICATE_TRAIL_LOGO_PATH,
+    path.join(__dirname, "assets", "granja-porcon-trail-logo.png"),
+  ].filter(Boolean), "No se encontro el logo trail del certificado");
+
+  cachedTrailLogoDataUri = fileToDataUri(logoPath);
+  return cachedTrailLogoDataUri;
+}
+
+function getTrailCajamarcaLogoDataUri() {
+  if (cachedTrailCajamarcaLogoDataUri) return cachedTrailCajamarcaLogoDataUri;
+
+  const logoPath = resolveExistingAsset([
+    process.env.CERTIFICATE_TRAIL_CAJAMARCA_LOGO_PATH,
+    path.join(__dirname, "assets", "cajamarca-runners-white-logo.png"),
+  ].filter(Boolean), "No se encontro el logo Cajamarca Runners trail");
+
+  cachedTrailCajamarcaLogoDataUri = fileToDataUri(logoPath);
+  return cachedTrailCajamarcaLogoDataUri;
+}
+
+function buildTrailCertificateHtmlDocument(race, certificate) {
+  const eventDate = formatDateEs(race?.eventDate);
+  const trailLogoDataUri = getTrailLogoDataUri();
+  const crLogoDataUri = getTrailCajamarcaLogoDataUri();
+  const isNoTimeCertificate = Boolean(certificate?.noTime);
+  const officialTime = formatCertificateTime(certificate.timeMs);
+  const subtitle = isNoTimeCertificate
+    ? "El comite organizador certifica una llegada validada sin tiempo oficial."
+    : "El comite organizador certifica que el corredor(a) concluyo oficialmente la prueba.";
+  const summary = isNoTimeCertificate
+    ? `Se certifica la llegada validada a la distancia de <strong>${escapeHtml(certificate.distance)}</strong>, con registro confirmado <strong>sin tiempo oficial</strong>.`
+    : `Concluyo oficialmente la distancia de <strong>${escapeHtml(certificate.distance)}</strong>, ocupando el puesto <strong>${escapeHtml(certificate.position)}</strong> en la clasificacion general de su distancia, con un tiempo oficial de <strong>${escapeHtml(officialTime)}</strong>.`;
+  const timeLabel = isNoTimeCertificate ? "Estado" : "Tiempo oficial";
+  const timeValue = isNoTimeCertificate ? "ST" : officialTime;
+
+  return `<!doctype html>
+  <html lang="es">
+    <head>
+      <meta charset="utf-8" />
+      <title>Certificado ${escapeHtml(certificate.name)}</title>
+      <style>
+        * { box-sizing: border-box; }
+        html, body {
+          margin: 0;
+          width: 100%;
+          height: 100%;
+          font-family: Arial, Helvetica, sans-serif;
+          background: #ffffff;
+        }
+        body {
+          display: flex;
+          align-items: stretch;
+          justify-content: stretch;
+        }
+        .page {
+          width: 1120px;
+          height: 760px;
+          margin: 0 auto;
+          position: relative;
+          overflow: hidden;
+          color: #f7fff4;
+          background:
+            radial-gradient(circle at 18% 10%, rgba(188, 216, 82, 0.3), transparent 26%),
+            linear-gradient(180deg, #014353 0%, #00615b 44%, #3d7a28 72%, #c57a00 100%);
+        }
+        .map-lines {
+          position: absolute;
+          inset: 0;
+          opacity: 0.16;
+          background-image:
+            repeating-radial-gradient(ellipse at 30% 30%, transparent 0 16px, rgba(255,255,255,0.45) 17px 18px),
+            repeating-radial-gradient(ellipse at 70% 65%, transparent 0 22px, rgba(255,255,255,0.24) 23px 24px);
+          mix-blend-mode: screen;
+        }
+        .trail-watermark {
+          position: absolute;
+          left: 50%;
+          top: 51%;
+          width: 420px;
+          max-width: 42%;
+          height: auto;
+          transform: translate(-50%, -50%);
+          opacity: 0.08;
+          filter: drop-shadow(0 20px 28px rgba(0,0,0,0.18));
+          z-index: 1;
+          pointer-events: none;
+        }
+        .sun {
+          position: absolute;
+          right: 78px;
+          top: 62px;
+          width: 132px;
+          height: 132px;
+          border-radius: 50%;
+          background: rgba(245, 162, 25, 0.22);
+          border: 2px solid rgba(255, 229, 156, 0.5);
+        }
+        .pines {
+          position: absolute;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          height: 178px;
+          background:
+            linear-gradient(135deg, transparent 0 36%, rgba(0, 54, 45, 0.86) 36% 46%, transparent 46%) 0 44px / 86px 122px repeat-x,
+            linear-gradient(45deg, transparent 0 36%, rgba(0, 42, 36, 0.72) 36% 46%, transparent 46%) 34px 64px / 96px 114px repeat-x,
+            linear-gradient(180deg, rgba(0, 48, 39, 0) 0%, rgba(0, 39, 33, 0.78) 62%, rgba(0, 33, 29, 0.95) 100%);
+        }
+        .ridge {
+          position: absolute;
+          left: -80px;
+          right: -80px;
+          bottom: 130px;
+          height: 128px;
+          background: linear-gradient(135deg, transparent 0 48%, rgba(10, 70, 54, 0.55) 49%, rgba(10, 70, 54, 0.55) 56%, transparent 57%);
+          opacity: 0.65;
+        }
+        .content {
+          position: relative;
+          z-index: 2;
+          min-height: 760px;
+          padding: 34px 54px 28px;
+          display: flex;
+          flex-direction: column;
+        }
+        .header {
+          display: flex;
+          justify-content: space-between;
+          align-items: flex-start;
+          gap: 28px;
+        }
+        .cr-logo {
+          position: absolute;
+          right: 88px;
+          top: 74px;
+          width: 112px;
+          height: auto;
+          opacity: 0.94;
+          filter: drop-shadow(0 8px 14px rgba(0,0,0,0.26));
+          z-index: 3;
+        }
+        .event-pill {
+          display: inline-block;
+          max-width: 620px;
+          padding: 10px 15px;
+          border: 1px solid rgba(255,255,255,0.28);
+          background: rgba(0, 40, 36, 0.28);
+          border-radius: 999px;
+          color: rgba(255,255,255,0.92);
+          font-size: 13px;
+          font-weight: 800;
+          letter-spacing: 0.08em;
+          text-transform: uppercase;
+        }
+        .title {
+          margin: 46px 0 0;
+          text-align: center;
+          font-size: 58px;
+          line-height: 1;
+          font-weight: 1000;
+          letter-spacing: 0.06em;
+          text-transform: uppercase;
+          text-shadow: 0 8px 20px rgba(0,0,0,0.28);
+        }
+        .subtitle {
+          max-width: 760px;
+          margin: 16px auto 0;
+          text-align: center;
+          color: rgba(255,255,255,0.88);
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: 21px;
+          line-height: 1.45;
+          font-weight: 500;
+        }
+        .name {
+          margin: 30px auto 16px;
+          max-width: 920px;
+          text-align: center;
+          color: #ffffff;
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: 50px;
+          line-height: 1.08;
+          font-weight: 700;
+          text-transform: none;
+        }
+        .summary {
+          max-width: 830px;
+          margin: 0 auto;
+          text-align: center;
+          color: rgba(255,255,255,0.92);
+          font-family: Georgia, "Times New Roman", serif;
+          font-size: 22px;
+          line-height: 1.62;
+          font-weight: 500;
+        }
+        .summary strong {
+          color: #ffd36a;
+          font-weight: 1000;
+        }
+        .metrics {
+          display: grid;
+          grid-template-columns: repeat(3, 1fr);
+          gap: 18px;
+          margin: 28px auto 0;
+          width: 860px;
+        }
+        .metric {
+          min-height: 94px;
+          border-radius: 7px;
+          padding: 18px 14px;
+          text-align: center;
+          background: rgba(0, 36, 32, 0.36);
+          border: 1px solid rgba(255,255,255,0.2);
+          box-shadow: inset 0 1px 0 rgba(255,255,255,0.14);
+        }
+        .metric-value {
+          color: #ffffff;
+          font-size: 34px;
+          line-height: 1;
+          font-weight: 1000;
+          white-space: nowrap;
+        }
+        .metric-label {
+          margin-top: 12px;
+          color: #cfe7c7;
+          font-size: 12px;
+          font-weight: 900;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+        }
+        .secondary-meta {
+          margin: 16px auto 0;
+          display: flex;
+          justify-content: center;
+          gap: 18px;
+          color: rgba(255,255,255,0.86);
+          font-size: 14px;
+          font-weight: 700;
+        }
+        .secondary-meta strong {
+          color: #ffd36a;
+        }
+        .footer {
+          margin-top: auto;
+          display: flex;
+          justify-content: space-between;
+          align-items: end;
+          gap: 20px;
+          color: rgba(255,255,255,0.82);
+          font-size: 14px;
+          font-weight: 700;
+        }
+        .footer strong {
+          color: #ffffff;
+        }
+        @page {
+          size: A4 landscape;
+          margin: 0;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="page">
+        <div class="map-lines"></div>
+        <img class="trail-watermark" src="${trailLogoDataUri}" alt="" />
+        <div class="sun"></div>
+        <div class="ridge"></div>
+        <div class="pines"></div>
+        <div class="content">
+          <div class="header">
+            <div>
+              <div class="event-pill">${escapeHtml(race.name || "Resultado oficial")}</div>
+            </div>
+            <img class="cr-logo" src="${crLogoDataUri}" alt="Cajamarca Runners" />
+          </div>
+
+          <h1 class="title">CERTIFICADO</h1>
+          <p class="subtitle">${subtitle}</p>
+          <div class="name">${escapeHtml(certificate.name)}</div>
+          <div class="summary">${summary}</div>
+
+          <div class="metrics">
+            <div class="metric">
+              <div class="metric-value">${escapeHtml(timeValue)}</div>
+              <div class="metric-label">${timeLabel}</div>
+            </div>
+            <div class="metric">
+              <div class="metric-value">${escapeHtml(certificate.position ?? "-")}</div>
+              <div class="metric-label">Puesto por distancia</div>
+            </div>
+            <div class="metric">
+              <div class="metric-value">${escapeHtml(certificate.dorsal)}</div>
+              <div class="metric-label">Dorsal</div>
+            </div>
+          </div>
+
+          <div class="secondary-meta">
+            <span><strong>Categoria:</strong> ${escapeHtml(certificate.categoryName ?? "-")}</span>
+            <span><strong>Puesto categoria:</strong> ${escapeHtml(certificate.categoryPosition ?? "-")}</span>
+            <span><strong>Distancia:</strong> ${escapeHtml(certificate.distance ?? "-")}</span>
+          </div>
+
+          <div class="footer">
+            <div><strong>Fecha del evento:</strong> ${escapeHtml(eventDate || "-")}</div>
+            <div><strong>Codigo:</strong> ${escapeHtml(certificate.certificateCode || "-")}</div>
+          </div>
+        </div>
+      </div>
+    </body>
+  </html>`;
+}
+
 function buildCertificateHtmlDocument(race, certificate) {
+  if (normalizeCertificateTemplate(race?.certificateTemplate) === "trail") {
+    return buildTrailCertificateHtmlDocument(race, certificate);
+  }
+
   const eventDate = formatDateEs(race?.eventDate);
   const logoDataUri = getLogoDataUri();
   const watermarkDataUri = getWatermarkDataUri();
@@ -1239,7 +1569,7 @@ app.post("/api/races", async (req, res) => {
     return res.status(403).json({ error: "Sin permisos" });
   }
 
-  const { name, slug, eventDate, categories, distances, publicNotice, certificatesEnabled, showDorsalPublic } = req.body;
+  const { name, slug, eventDate, categories, distances, publicNotice, certificatesEnabled, showDorsalPublic, certificateTemplate } = req.body;
   if (!name || !String(name).trim()) {
     return res.status(400).json({ error: "name requerido" });
   }
@@ -1260,6 +1590,7 @@ app.post("/api/races", async (req, res) => {
         publicNotice: publicNotice == null ? null : String(publicNotice).trim() || null,
         certificatesEnabled: certificatesEnabled !== false,
         showDorsalPublic: showDorsalPublic !== false,
+        certificateTemplate: normalizeCertificateTemplate(certificateTemplate),
         categories: categories ?? DEFAULT_CATEGORIES,
         distances: normalizeDistances(distances),
         status: "DRAFT",
@@ -1425,6 +1756,10 @@ app.put("/api/races/:raceId", async (req, res) => {
 
     if (Object.prototype.hasOwnProperty.call(req.body || {}, "showDorsalPublic")) {
       data.showDorsalPublic = Boolean(req.body.showDorsalPublic);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "certificateTemplate")) {
+      data.certificateTemplate = normalizeCertificateTemplate(req.body.certificateTemplate);
     }
 
     const updated = await prisma.race.update({
@@ -1663,6 +1998,61 @@ app.get("/api/participants/search", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(err.statusCode || 500).json({ error: err.message || "Error al buscar participante" });
+  }
+});
+
+app.put("/api/participants/:id", async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (Number.isNaN(id)) return res.status(400).json({ error: "id invalido" });
+
+  const documento = String(req.body?.documento ?? "").trim();
+  const nombre = String(req.body?.nombre ?? "").trim();
+  const edad = Number(req.body?.edad);
+  const genero = String(req.body?.genero ?? "").trim().toUpperCase();
+  const distancia = String(req.body?.distancia ?? "").trim().toUpperCase();
+  const dorsalRaw = req.body?.dorsal;
+  const dorsal = dorsalRaw == null || String(dorsalRaw).trim() === ""
+    ? null
+    : String(dorsalRaw).trim();
+
+  if (!documento) return res.status(400).json({ error: "documento requerido" });
+  if (!nombre) return res.status(400).json({ error: "nombre requerido" });
+  if (!Number.isFinite(edad) || edad <= 0) return res.status(400).json({ error: "edad invalida" });
+  if (!["M", "F"].includes(genero)) return res.status(400).json({ error: "genero invalido" });
+  if (!distancia) return res.status(400).json({ error: "distancia requerida" });
+
+  try {
+    const race = await resolveRace(req);
+    const current = await prisma.participant.findUnique({ where: { id } });
+    if (!current || current.raceId !== race.id) {
+      return res.status(404).json({ error: "Participante no encontrado" });
+    }
+
+    const participant = await prisma.participant.update({
+      where: { id },
+      data: {
+        documento,
+        nombre,
+        edad,
+        genero,
+        distancia,
+        dorsal,
+      },
+    });
+    res.json({ success: true, participant });
+  } catch (err) {
+    if (err.code === "P2002") {
+      const target = Array.isArray(err.meta?.target) ? err.meta.target.join(", ") : "";
+      if (target.includes("documento")) {
+        return res.status(409).json({ error: "Este documento ya pertenece a otro participante" });
+      }
+      if (target.includes("dorsal")) {
+        return res.status(409).json({ error: "Este dorsal ya esta asignado a otro participante" });
+      }
+      return res.status(409).json({ error: "Documento o dorsal duplicado" });
+    }
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al actualizar participante" });
   }
 });
 
