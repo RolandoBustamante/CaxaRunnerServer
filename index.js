@@ -1061,6 +1061,12 @@ function normalizeText(value) {
   return String(value || "").trim();
 }
 
+function normalizeDorsal(value) {
+  const dorsal = normalizeText(value).replace(/\.0$/, "");
+  if (!dorsal) return "";
+  return /^\d+$/.test(dorsal) && dorsal.length < 3 ? dorsal.padStart(3, "0") : dorsal;
+}
+
 function normalizeGender(value) {
   return normalizeText(value).toUpperCase();
 }
@@ -1116,7 +1122,7 @@ function getParticipantCategoryMeta(participant, categories = DEFAULT_CATEGORIES
 
 function buildCertificateContext({ finishers, participants, categories, dorsal }) {
   const participantMap = new Map(
-    participants.map((participant) => [normalizeText(participant.dorsal), participant])
+    participants.map((participant) => [normalizeDorsal(participant.dorsal), participant])
   );
   const activeFinishers = finishers
     .filter((finisher) => !finisher.disqualified && !isNoTimeFinisher(finisher))
@@ -1136,7 +1142,7 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
   const standings = new Map();
 
   activeFinishers.forEach((finisher, index) => {
-    const participant = participantMap.get(normalizeText(finisher.dorsal));
+    const participant = participantMap.get(normalizeDorsal(finisher.dorsal));
     const meta = getParticipantCategoryMeta(participant, categories);
     const distanceKey = meta.distance || null;
     const genderKey = [meta.distance, meta.gender].filter(Boolean).join("::");
@@ -1167,7 +1173,7 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
       awardCategoryCounters.set(categoryKey, awardCategoryRankResult.state);
     }
 
-    standings.set(normalizeText(finisher.dorsal), {
+    standings.set(normalizeDorsal(finisher.dorsal), {
       overallPosition: index + 1,
       distanceOverallPosition: distanceOverallPosition ?? index + 1,
       genderPosition,
@@ -1178,7 +1184,7 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
     });
   });
 
-  return standings.get(normalizeText(dorsal)) || null;
+  return standings.get(normalizeDorsal(dorsal)) || null;
 }
 
 async function getRacePayload(race) {
@@ -1275,13 +1281,13 @@ app.get("/api/public/:slug/results", async (req, res) => {
     ]);
 
     const participantMap = new Map(
-      participants.map((participant) => [String(participant.dorsal || "").trim(), participant])
+      participants.map((participant) => [normalizeDorsal(participant.dorsal), participant])
     );
 
     res.json({
       race: serializeRace(race),
       results: finishers.map((finisher) => {
-        const participant = participantMap.get(String(finisher.dorsal).trim()) || null;
+        const participant = participantMap.get(normalizeDorsal(finisher.dorsal)) || null;
         return {
           id: finisher.id,
           dorsal: race.showDorsalPublic ? finisher.dorsal : null,
@@ -1793,7 +1799,7 @@ app.post("/api/participants", async (req, res) => {
         participant.dorsal !== undefined &&
         participant.dorsal !== null &&
         String(participant.dorsal).trim() !== ""
-          ? String(participant.dorsal).trim()
+          ? normalizeDorsal(participant.dorsal)
           : null,
     }));
     const participantErrors = [];
@@ -1898,7 +1904,7 @@ app.post("/api/participants/dorsals", async (req, res) => {
     const normalizedAssignments = assignments.map((item, index) => ({
       row: index + 2,
       documento: String(item?.documento || "").trim(),
-      dorsal: String(item?.dorsal || "").trim(),
+      dorsal: normalizeDorsal(item?.dorsal),
     }));
 
     const invalid = normalizedAssignments.filter((item) => !item.documento || !item.dorsal);
@@ -2013,7 +2019,7 @@ app.put("/api/participants/:id", async (req, res) => {
   const dorsalRaw = req.body?.dorsal;
   const dorsal = dorsalRaw == null || String(dorsalRaw).trim() === ""
     ? null
-    : String(dorsalRaw).trim();
+    : normalizeDorsal(dorsalRaw);
 
   if (!documento) return res.status(400).json({ error: "documento requerido" });
   if (!nombre) return res.status(400).json({ error: "nombre requerido" });
@@ -2058,7 +2064,7 @@ app.put("/api/participants/:id", async (req, res) => {
 
 app.post("/api/participants/:id/dorsal", async (req, res) => {
   const id = parseInt(req.params.id, 10);
-  const { dorsal } = req.body;
+  const dorsal = normalizeDorsal(req.body?.dorsal);
   if (!dorsal) return res.status(400).json({ error: "dorsal requerido" });
 
   try {
@@ -2070,7 +2076,7 @@ app.post("/api/participants/:id/dorsal", async (req, res) => {
 
     const participant = await prisma.participant.update({
       where: { id },
-      data: { dorsal: String(dorsal).trim() },
+      data: { dorsal },
     });
     res.json({ success: true, participant });
   } catch (err) {
@@ -2123,7 +2129,8 @@ app.post("/api/participants/:id/carta", async (req, res) => {
 });
 
 app.post("/api/finishers", async (req, res) => {
-  const { dorsal, timestamp, elapsedMs, reorder } = req.body;
+  const { timestamp, elapsedMs, reorder } = req.body;
+  const dorsal = normalizeDorsal(req.body?.dorsal);
   if (!dorsal) return res.status(400).json({ error: "dorsal requerido" });
 
   try {
@@ -2132,7 +2139,7 @@ app.post("/api/finishers", async (req, res) => {
     await prisma.finisher.create({
       data: {
         raceId: race.id,
-        dorsal: String(dorsal).trim(),
+        dorsal,
         position: count + 1,
         timestamp: BigInt(timestamp ?? Date.now()),
         elapsedMs: BigInt(Math.round((elapsedMs ?? 0) * 1000)),
@@ -2175,7 +2182,7 @@ app.post("/api/finishers/import", async (req, res) => {
   const errors = [];
 
   finishers.forEach((finisher, index) => {
-    const dorsal = String(finisher?.dorsal || "").trim();
+    const dorsal = normalizeDorsal(finisher?.dorsal);
     const elapsedMs = Number(finisher?.elapsedMs);
     const position = Number.parseInt(finisher?.position, 10);
     const rowErrors = [];
@@ -2210,7 +2217,7 @@ app.post("/api/finishers/import", async (req, res) => {
       where: { raceId: race.id },
       select: { dorsal: true },
     });
-    const existingDorsals = new Set(existing.map((finisher) => String(finisher.dorsal).trim()));
+    const existingDorsals = new Set(existing.map((finisher) => normalizeDorsal(finisher.dorsal)));
     const ordered = normalized
       .slice()
       .sort((a, b) => {
