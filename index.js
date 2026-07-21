@@ -373,11 +373,11 @@ function buildTrailCertificateHtmlDocument(race, certificate) {
   const isNoTimeCertificate = Boolean(certificate?.noTime);
   const officialTime = formatCertificateTime(certificate.timeMs);
   const subtitle = isNoTimeCertificate
-    ? "El comite organizador certifica una llegada validada sin tiempo oficial."
-    : "El comite organizador certifica que el corredor(a) concluyo oficialmente la prueba.";
+    ? "El comité organizador certifica una llegada validada sin tiempo oficial."
+    : "El comité organizador certifica que el corredor(a) concluyó oficialmente la prueba.";
   const summary = isNoTimeCertificate
     ? `Se certifica la llegada validada a la distancia de <strong>${escapeHtml(certificate.distance)}</strong>, con registro confirmado <strong>sin tiempo oficial</strong>.`
-    : `Concluyo oficialmente la distancia de <strong>${escapeHtml(certificate.distance)}</strong>, ocupando el puesto <strong>${escapeHtml(certificate.position)}</strong> en la clasificacion general de su distancia, con un tiempo oficial de <strong>${escapeHtml(officialTime)}</strong>.`;
+    : `Concluyó oficialmente la distancia de <strong>${escapeHtml(certificate.distance)}</strong>, ocupando el puesto <strong>${escapeHtml(certificate.position)}</strong> en la clasificación general de su distancia, con un tiempo oficial de <strong>${escapeHtml(officialTime)}</strong>.`;
   const timeLabel = isNoTimeCertificate ? "Estado" : "Tiempo oficial";
   const timeValue = isNoTimeCertificate ? "ST" : officialTime;
 
@@ -433,16 +433,6 @@ function buildTrailCertificateHtmlDocument(race, certificate) {
           z-index: 1;
           pointer-events: none;
         }
-        .sun {
-          position: absolute;
-          right: 78px;
-          top: 62px;
-          width: 132px;
-          height: 132px;
-          border-radius: 50%;
-          background: rgba(245, 162, 25, 0.22);
-          border: 2px solid rgba(255, 229, 156, 0.5);
-        }
         .pines {
           position: absolute;
           left: 0;
@@ -479,9 +469,9 @@ function buildTrailCertificateHtmlDocument(race, certificate) {
         }
         .cr-logo {
           position: absolute;
-          right: 88px;
-          top: 74px;
-          width: 112px;
+          right: 82px;
+          top: 70px;
+          width: 124px;
           height: auto;
           opacity: 0.94;
           filter: drop-shadow(0 8px 14px rgba(0,0,0,0.26));
@@ -611,7 +601,6 @@ function buildTrailCertificateHtmlDocument(race, certificate) {
       <div class="page">
         <div class="map-lines"></div>
         <img class="trail-watermark" src="${trailLogoDataUri}" alt="" />
-        <div class="sun"></div>
         <div class="ridge"></div>
         <div class="pines"></div>
         <div class="content">
@@ -643,14 +632,14 @@ function buildTrailCertificateHtmlDocument(race, certificate) {
           </div>
 
           <div class="secondary-meta">
-            <span><strong>Categoria:</strong> ${escapeHtml(certificate.categoryName ?? "-")}</span>
-            <span><strong>Puesto categoria:</strong> ${escapeHtml(certificate.categoryPosition ?? "-")}</span>
+            <span><strong>Categoría:</strong> ${escapeHtml(certificate.categoryName ?? "-")}</span>
+            <span><strong>Puesto en categoría:</strong> ${escapeHtml(certificate.categoryPosition ?? "-")}</span>
             <span><strong>Distancia:</strong> ${escapeHtml(certificate.distance ?? "-")}</span>
           </div>
 
           <div class="footer">
             <div><strong>Fecha del evento:</strong> ${escapeHtml(eventDate || "-")}</div>
-            <div><strong>Codigo:</strong> ${escapeHtml(certificate.certificateCode || "-")}</div>
+            <div><strong>Código:</strong> ${escapeHtml(certificate.certificateCode || "-")}</div>
           </div>
         </div>
       </div>
@@ -668,12 +657,12 @@ function buildCertificateHtmlDocument(race, certificate) {
   const watermarkDataUri = getWatermarkDataUri();
   const isNoTimeCertificate = Boolean(certificate?.noTime);
   const subtitle = isNoTimeCertificate
-    ? "El comite organizador certifica una llegada validada sin tiempo oficial."
-    : "El comite organizador certifica que el corredor(a) concluyo oficialmente la prueba.";
+    ? "El comité organizador certifica una llegada validada sin tiempo oficial."
+    : "El comité organizador certifica que el corredor(a) concluyó oficialmente la prueba.";
   const summary = isNoTimeCertificate
     ? `Se certifica la llegada validada a la distancia de <strong>${escapeHtml(certificate.distance)}</strong>, con registro confirmado <strong>sin tiempo oficial</strong>.`
-    : `Concluyo oficialmente la distancia de <strong>${escapeHtml(certificate.distance)}</strong>,
-            ocupando el puesto <strong>${escapeHtml(certificate.position)}</strong> en la clasificacion general de su distancia,
+    : `Concluyó oficialmente la distancia de <strong>${escapeHtml(certificate.distance)}</strong>,
+            ocupando el puesto <strong>${escapeHtml(certificate.position)}</strong> en la clasificación general de su distancia,
             con un tiempo oficial de <strong>${escapeHtml(formatCertificateTime(certificate.timeMs))}</strong>.`;
   const metrics = isNoTimeCertificate
     ? `
@@ -714,9 +703,9 @@ function buildCertificateHtmlDocument(race, certificate) {
           </div>`
     : `
           <div class="secondary-meta">
-            <span><strong>Puesto por genero:</strong> ${escapeHtml(certificate.genderPosition ?? "-")}</span>
-            <span><strong>Categoria:</strong> ${escapeHtml(certificate.categoryName ?? "-")}</span>
-            <span><strong>Puesto en categoria:</strong> ${escapeHtml(certificate.categoryPosition ?? "-")}</span>
+            <span><strong>Puesto por género:</strong> ${escapeHtml(certificate.genderPosition ?? "-")}</span>
+            <span><strong>Categoría:</strong> ${escapeHtml(certificate.categoryName ?? "-")}</span>
+            <span><strong>Puesto en categoría:</strong> ${escapeHtml(certificate.categoryPosition ?? "-")}</span>
           </div>`;
 
   return `<!doctype html>
@@ -953,7 +942,7 @@ ${secondaryMeta}
 
           <div class="footer">
             <div><strong>Fecha del evento:</strong> ${escapeHtml(eventDate || "-")}</div>
-            <div><strong>Codigo de certificado:</strong> ${escapeHtml(certificate.certificateCode || "-")}</div>
+            <div><strong>Código de certificado:</strong> ${escapeHtml(certificate.certificateCode || "-")}</div>
           </div>
         </div>
       </div>
