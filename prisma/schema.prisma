@@ -17,6 +17,16 @@ model Race {
   certificatesEnabled Boolean @default(true) @map("certificates_enabled")
   showDorsalPublic Boolean @default(true) @map("show_dorsal_public")
   certificateTemplate String @default("classic") @map("certificate_template")
+  registrationsEnabled Boolean @default(false) @map("registrations_enabled")
+  discountsEnabled Boolean @default(false) @map("discounts_enabled")
+  registrationPrices Json? @map("registration_prices")
+  registrationInstructions String? @map("registration_instructions")
+  registrationNotificationPhones Json? @map("registration_notification_phones")
+  registrationPaymentMethods Json? @map("registration_payment_methods")
+  registrationRulesPdfPath String? @map("registration_rules_pdf_path")
+  registrationRulesPdfOriginalName String? @map("registration_rules_pdf_original_name")
+  raceLogoPath String? @map("race_logo_path")
+  raceLogoOriginalName String? @map("race_logo_original_name")
   status     String    @default("DRAFT")
   isOfficial Boolean   @default(false) @map("is_official")
   started    Boolean   @default(false)
@@ -30,9 +40,106 @@ model Race {
 
   participants Participant[]
   finishers    Finisher[]
+  registrations Registration[]
+  discountCodes DiscountCode[]
   userAssignments RaceUser[]
 
   @@map("races")
+}
+
+model Registration {
+  id             Int      @id @default(autoincrement())
+  raceId         Int      @map("race_id")
+  code           String   @unique
+  reviewToken    String   @unique @map("review_token")
+  status         String   @default("PENDING")
+  contactName    String   @map("contact_name")
+  contactPhone   String?  @map("contact_phone")
+  contactEmail   String?  @map("contact_email")
+  subtotalAmount  Decimal? @map("subtotal_amount") @db.Decimal(10, 2)
+  totalAmount    Decimal? @map("total_amount") @db.Decimal(10, 2)
+  discountCodeId  Int?     @map("discount_code_id")
+  discountCodeText String? @map("discount_code_text")
+  discountPercent Decimal? @map("discount_percent") @db.Decimal(5, 2)
+  discountAmount Decimal? @map("discount_amount") @db.Decimal(10, 2)
+  paymentMode    String   @default("ONE_VOUCHER") @map("payment_mode")
+  rulesAccepted   Boolean  @default(false) @map("rules_accepted")
+  rulesAcceptedAt DateTime? @map("rules_accepted_at")
+  notes          String?
+  approvedAt     DateTime? @map("approved_at")
+  rejectedAt     DateTime? @map("rejected_at")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  race Race @relation(fields: [raceId], references: [id], onDelete: Cascade)
+  discountCode DiscountCode? @relation(fields: [discountCodeId], references: [id], onDelete: SetNull)
+  participants RegistrationParticipant[]
+  vouchers RegistrationVoucher[]
+
+  @@index([raceId, status])
+  @@index([discountCodeId])
+  @@map("registrations")
+}
+
+model DiscountCode {
+  id          Int      @id @default(autoincrement())
+  raceId      Int      @map("race_id")
+  code        String
+  percent     Decimal  @db.Decimal(5, 2)
+  maxUses     Int?     @map("max_uses")
+  validUntil  DateTime? @map("valid_until")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  race Race @relation(fields: [raceId], references: [id], onDelete: Cascade)
+  registrations Registration[]
+
+  @@unique([raceId, code])
+  @@index([raceId, active])
+  @@map("discount_codes")
+}
+
+model RegistrationParticipant {
+  id             Int      @id @default(autoincrement())
+  registrationId Int      @map("registration_id")
+  documento      String
+  nombre         String
+  birthDate      DateTime @map("birth_date")
+  genero         String
+  distancia      String
+  procedencia    String
+  bloodType      String   @map("blood_type")
+  garmentType    String   @map("garment_type")
+  garmentSize    String   @map("garment_size")
+  club           String?
+  emergencyName  String?  @map("emergency_name")
+  emergencyPhone String?  @map("emergency_phone")
+  photoFileName   String?  @map("photo_file_name")
+  photoOriginalName String? @map("photo_original_name")
+  photoMimeType   String?  @map("photo_mime_type")
+  photoSizeBytes  Int?     @map("photo_size_bytes")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  registration Registration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  @@index([documento])
+  @@map("registration_participants")
+}
+
+model RegistrationVoucher {
+  id             Int      @id @default(autoincrement())
+  registrationId Int      @map("registration_id")
+  fileName       String   @map("file_name")
+  originalName   String   @map("original_name")
+  mimeType       String   @map("mime_type")
+  sizeBytes      Int      @map("size_bytes")
+  amount         Decimal? @db.Decimal(10, 2)
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  registration Registration @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  @@map("registration_vouchers")
 }
 
 model Participant {

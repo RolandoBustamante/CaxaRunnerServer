@@ -3,3 +3,15 @@ node_modules
 .env
 
 /generated/prisma
+
+# Runtime/local files
+.wwebjs_auth/
+.wwebjs_cache/
+uploads/*
+!uploads/race-assets/
+uploads/race-assets/*
+!uploads/race-assets/*.png
+!uploads/race-assets/*.jpg
+!uploads/race-assets/*.jpeg
+!uploads/race-assets/*.webp
+!uploads/race-assets/*.svg

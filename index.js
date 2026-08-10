@@ -3,13 +3,27 @@ const express = require("express");
 const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
+const multer = require("multer");
+const crypto = require("crypto");
 
 const { PrismaClient } = require("./generated/prisma");
 const requireAuth = require("./middleware/auth");
 const authRouter = require("./routes/auth");
+const {
+  getAdminNumbers,
+  getWhatsAppStatus,
+  initializeClient: initializeWhatsAppClient,
+  logoutClient: logoutWhatsAppClient,
+  restartClient: restartWhatsAppClient,
+  sendMessage: sendWhatsAppMessage,
+} = require("./utils/whatsapp");
 
 const prisma = new PrismaClient();
 const app = express();
+const VOUCHER_UPLOAD_DIR = path.join(__dirname, "uploads", "registration-vouchers");
+const PARTICIPANT_PHOTO_UPLOAD_DIR = path.join(__dirname, "uploads", "participant-photos");
+const PAYMENT_QR_UPLOAD_DIR = path.join(__dirname, "uploads", "payment-qrs");
+const RACE_ASSET_UPLOAD_DIR = path.join(__dirname, "uploads", "race-assets");
 
 const DEFAULT_RACE_SLUG = "carrera-actual";
 const DEFAULT_CATEGORIES = [
@@ -26,6 +40,111 @@ let cachedLogoDataUri = null;
 let cachedWatermarkDataUri = null;
 let cachedTrailLogoDataUri = null;
 let cachedTrailCajamarcaLogoDataUri = null;
+
+fs.mkdirSync(VOUCHER_UPLOAD_DIR, { recursive: true });
+fs.mkdirSync(PARTICIPANT_PHOTO_UPLOAD_DIR, { recursive: true });
+fs.mkdirSync(PAYMENT_QR_UPLOAD_DIR, { recursive: true });
+fs.mkdirSync(RACE_ASSET_UPLOAD_DIR, { recursive: true });
+
+const registrationUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, file, cb) => {
+      const isPhoto = /^participantPhoto_\d+$/.test(file.fieldname || "");
+      cb(null, isPhoto ? PARTICIPANT_PHOTO_UPLOAD_DIR : VOUCHER_UPLOAD_DIR);
+    },
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || "").toLowerCase();
+      const safeExt = [".jpg", ".jpeg", ".png", ".webp", ".pdf"].includes(ext) ? ext : "";
+      cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}${safeExt}`);
+    },
+  }),
+  limits: {
+    fileSize: 8 * 1024 * 1024,
+    files: 30,
+  },
+  fileFilter: (_req, file, cb) => {
+    const isVoucher = file.fieldname === "vouchers";
+    const isPhoto = /^participantPhoto_\d+$/.test(file.fieldname || "");
+    const allowed = isPhoto
+      ? new Set(["image/jpeg", "image/png", "image/webp"])
+      : new Set(["image/jpeg", "image/png", "image/webp", "application/pdf"]);
+    if (!isVoucher && !isPhoto) {
+      cb(new Error("Campo de archivo no permitido"));
+      return;
+    }
+    if (!allowed.has(file.mimetype)) {
+      cb(new Error(isPhoto ? "Solo se permiten fotos en JPG, PNG o WEBP" : "Solo se permiten vouchers en JPG, PNG, WEBP o PDF"));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
+const paymentQrUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, PAYMENT_QR_UPLOAD_DIR),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || "").toLowerCase();
+      const safeExt = [".jpg", ".jpeg", ".png", ".webp"].includes(ext) ? ext : ".png";
+      cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}${safeExt}`);
+    },
+  }),
+  limits: {
+    fileSize: 5 * 1024 * 1024,
+    files: 1,
+  },
+  fileFilter: (_req, file, cb) => {
+    const allowed = new Set(["image/jpeg", "image/png", "image/webp"]);
+    if (!allowed.has(file.mimetype)) {
+      cb(new Error("Solo se permiten QR en JPG, PNG o WEBP"));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
+const raceRulesUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, RACE_ASSET_UPLOAD_DIR),
+    filename: (_req, file, cb) => {
+      cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}-bases.pdf`);
+    },
+  }),
+  limits: {
+    fileSize: 12 * 1024 * 1024,
+    files: 1,
+  },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype !== "application/pdf") {
+      cb(new Error("Solo se permite PDF para las bases de la carrera"));
+      return;
+    }
+    cb(null, true);
+  },
+});
+
+const raceLogoUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, cb) => cb(null, RACE_ASSET_UPLOAD_DIR),
+    filename: (_req, file, cb) => {
+      const ext = path.extname(file.originalname || "").toLowerCase();
+      const safeExt = [".jpg", ".jpeg", ".png", ".webp"].includes(ext) ? ext : ".png";
+      cb(null, `${Date.now()}-${Math.round(Math.random() * 1e9)}-logo${safeExt}`);
+    },
+  }),
+  limits: {
+    fileSize: 5 * 1024 * 1024,
+    files: 1,
+  },
+  fileFilter: (_req, file, cb) => {
+    const allowed = new Set(["image/jpeg", "image/png", "image/webp"]);
+    if (!allowed.has(file.mimetype)) {
+      cb(new Error("Solo se permite logo en JPG, PNG o WEBP"));
+      return;
+    }
+    cb(null, true);
+  },
+});
 
 function normalizeCertificateTemplate(value) {
   const template = String(value || DEFAULT_CERTIFICATE_TEMPLATE).trim().toLowerCase();
@@ -163,6 +282,16 @@ function serializeRace(race) {
     certificatesEnabled: race.certificatesEnabled,
     showDorsalPublic: race.showDorsalPublic,
     certificateTemplate: normalizeCertificateTemplate(race.certificateTemplate),
+    registrationsEnabled: race.registrationsEnabled,
+    discountsEnabled: race.discountsEnabled,
+    registrationPrices: race.registrationPrices ?? null,
+    registrationInstructions: race.registrationInstructions ?? null,
+    registrationNotificationPhones: Array.isArray(race.registrationNotificationPhones) ? race.registrationNotificationPhones : [],
+    registrationPaymentMethods: race.registrationPaymentMethods ?? null,
+    registrationRulesPdfPath: race.registrationRulesPdfPath ?? null,
+    registrationRulesPdfOriginalName: race.registrationRulesPdfOriginalName ?? null,
+    raceLogoPath: race.raceLogoPath ?? null,
+    raceLogoOriginalName: race.raceLogoOriginalName ?? null,
     status: race.status,
     isOfficial: race.isOfficial,
     raceStarted: race.started,
@@ -172,6 +301,407 @@ function serializeRace(race) {
     categories: race.categories ?? null,
     distances: race.distances ?? null,
   };
+}
+
+function serializeRegistration(registration) {
+  return {
+    id: registration.id,
+    raceId: registration.raceId,
+    code: registration.code,
+    reviewToken: registration.reviewToken,
+    status: registration.status,
+    contactName: registration.contactName,
+    contactPhone: registration.contactPhone,
+    contactEmail: registration.contactEmail,
+    subtotalAmount: registration.subtotalAmount == null ? null : Number(registration.subtotalAmount),
+    totalAmount: registration.totalAmount == null ? null : Number(registration.totalAmount),
+    discountCode: registration.discountCodeText,
+    discountPercent: registration.discountPercent == null ? null : Number(registration.discountPercent),
+    discountAmount: registration.discountAmount == null ? null : Number(registration.discountAmount),
+    paymentMode: registration.paymentMode,
+    rulesAccepted: registration.rulesAccepted,
+    rulesAcceptedAt: registration.rulesAcceptedAt,
+    notes: registration.notes,
+    approvedAt: registration.approvedAt,
+    rejectedAt: registration.rejectedAt,
+    createdAt: registration.createdAt,
+    updatedAt: registration.updatedAt,
+    participants: (registration.participants || []).map((participant) => ({
+      id: participant.id,
+      documento: participant.documento,
+      nombre: participant.nombre,
+      birthDate: participant.birthDate,
+      edad: participant.birthDate ? calculateAge(participant.birthDate) : null,
+      genero: participant.genero,
+      distancia: participant.distancia,
+      procedencia: participant.procedencia,
+      bloodType: participant.bloodType,
+      garmentType: participant.garmentType,
+      garmentSize: participant.garmentSize,
+      club: participant.club,
+      emergencyName: participant.emergencyName,
+      emergencyPhone: participant.emergencyPhone,
+      photo: participant.photoFileName
+        ? {
+            originalName: participant.photoOriginalName,
+            mimeType: participant.photoMimeType,
+            sizeBytes: participant.photoSizeBytes,
+          }
+        : null,
+    })),
+    vouchers: (registration.vouchers || []).map((voucher) => ({
+      id: voucher.id,
+      originalName: voucher.originalName,
+      mimeType: voucher.mimeType,
+      sizeBytes: voucher.sizeBytes,
+      amount: voucher.amount == null ? null : Number(voucher.amount),
+      createdAt: voucher.createdAt,
+    })),
+  };
+}
+
+function parseRegistrationPrices(value) {
+  if (value == null) return null;
+  if (!Array.isArray(value)) return null;
+  const prices = value
+    .map((item) => ({
+      distance: String(item?.distance || "").trim().toUpperCase(),
+      price: Number(item?.price),
+      label: String(item?.label || "").trim() || null,
+    }))
+    .filter((item) => item.distance && Number.isFinite(item.price) && item.price >= 0);
+  return prices.length > 0 ? prices : null;
+}
+
+function parseNotificationPhones(value) {
+  const source = Array.isArray(value)
+    ? value
+    : String(value || "").split(/[\n,;]/);
+  const phones = [
+    ...new Set(
+      source
+        .map((phone) => String(phone || "").replace(/\D/g, ""))
+        .filter((phone) => phone.length >= 9)
+    ),
+  ];
+  return phones.length > 0 ? phones : null;
+}
+
+function normalizePaymentQrPath(value) {
+  const fileName = path.basename(String(value || "").trim());
+  if (!fileName) return null;
+  return `/api/payment-qrs/${encodeURIComponent(fileName)}`;
+}
+
+function parseRegistrationPaymentMethods(value) {
+  if (!value || typeof value !== "object") return null;
+
+  const bankAccounts = Array.isArray(value.bankAccounts)
+    ? value.bankAccounts.map((item) => ({
+        bank: String(item?.bank || "").trim(),
+        holder: String(item?.holder || "").trim(),
+        accountNumber: String(item?.accountNumber || "").trim(),
+        cci: String(item?.cci || "").trim(),
+        currency: String(item?.currency || "PEN").trim().toUpperCase(),
+        notes: String(item?.notes || "").trim(),
+      })).filter((item) => item.bank || item.holder || item.accountNumber || item.cci)
+    : [];
+
+  const digitalWallets = Array.isArray(value.digitalWallets)
+    ? value.digitalWallets.map((item) => ({
+        type: String(item?.type || "YAPE").trim().toUpperCase(),
+        phone: String(item?.phone || "").replace(/\D/g, ""),
+        holder: String(item?.holder || "").trim(),
+        qrPath: normalizePaymentQrPath(item?.qrPath),
+        notes: String(item?.notes || "").trim(),
+      })).filter((item) => item.phone || item.holder || item.qrPath || item.notes)
+    : [];
+
+  return bankAccounts.length || digitalWallets.length
+    ? { bankAccounts, digitalWallets }
+    : null;
+}
+
+function getRegistrationPriceMap(race) {
+  const rows = Array.isArray(race?.registrationPrices) ? race.registrationPrices : [];
+  return new Map(
+    rows
+      .map((item) => [String(item.distance || "").trim().toUpperCase(), Number(item.price)])
+      .filter(([distance, price]) => distance && Number.isFinite(price) && price >= 0)
+  );
+}
+
+function normalizeDiscountCode(value) {
+  return String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+}
+
+function roundMoney(value) {
+  return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+}
+
+function parseValidUntil(value) {
+  if (value == null || value === "") return null;
+  const text = String(value).trim();
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(text)
+    ? new Date(`${text}T23:59:59.999Z`)
+    : new Date(text);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+async function countDiscountUses(discountCodeId) {
+  if (!discountCodeId) return 0;
+  return prisma.registration.count({
+    where: {
+      discountCodeId,
+      status: { not: "REJECTED" },
+    },
+  });
+}
+
+async function validateDiscountCode(raceId, rawCode) {
+  const code = normalizeDiscountCode(rawCode);
+  if (!code) return null;
+
+  const discountCode = await prisma.discountCode.findUnique({
+    where: {
+      raceId_code: {
+        raceId,
+        code,
+      },
+    },
+  });
+  if (!discountCode || !discountCode.active) {
+    const error = new Error("Codigo de descuento invalido");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (discountCode.validUntil && discountCode.validUntil.getTime() < Date.now()) {
+    const error = new Error("Codigo de descuento vencido");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const usedCount = await countDiscountUses(discountCode.id);
+  if (discountCode.maxUses != null && usedCount >= discountCode.maxUses) {
+    const error = new Error("Codigo de descuento sin cupos disponibles");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return { ...discountCode, usedCount };
+}
+
+function serializeDiscountCode(discountCode) {
+  return {
+    id: discountCode.id,
+    raceId: discountCode.raceId,
+    code: discountCode.code,
+    percent: Number(discountCode.percent),
+    maxUses: discountCode.maxUses,
+    usedCount: discountCode.usedCount ?? discountCode._count?.registrations ?? 0,
+    validUntil: discountCode.validUntil,
+    active: discountCode.active,
+    createdAt: discountCode.createdAt,
+    updatedAt: discountCode.updatedAt,
+  };
+}
+
+function normalizeBloodType(value) {
+  return String(value || "").trim().toUpperCase().replace(/\s+/g, "");
+}
+
+function buildRegistrationCode(raceId) {
+  const suffix = Math.random().toString(36).slice(2, 8).toUpperCase();
+  return `INS-${raceId}-${Date.now().toString(36).toUpperCase()}-${suffix}`;
+}
+
+function buildReviewToken() {
+  return crypto.randomBytes(24).toString("hex");
+}
+
+function parseBirthDate(value) {
+  const text = String(value || "").trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) return null;
+  const date = new Date(`${text}T00:00:00.000Z`);
+  if (Number.isNaN(date.getTime())) return null;
+  if (date.toISOString().slice(0, 10) !== text) return null;
+  return date;
+}
+
+function calculateAge(value, reference = new Date()) {
+  const birthDate = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(birthDate.getTime())) return null;
+  let age = reference.getUTCFullYear() - birthDate.getUTCFullYear();
+  const monthDiff = reference.getUTCMonth() - birthDate.getUTCMonth();
+  if (monthDiff < 0 || (monthDiff === 0 && reference.getUTCDate() < birthDate.getUTCDate())) {
+    age -= 1;
+  }
+  return age;
+}
+
+function unlinkUploadedFiles(files) {
+  (files || []).forEach((file) => fs.promises.unlink(file.path).catch(() => {}));
+}
+
+function sendLocalUpload(res, directory, fileName, originalName, mimeType) {
+  const baseDir = path.resolve(directory);
+  const filePath = path.resolve(baseDir, fileName);
+  if (!filePath.startsWith(`${baseDir}${path.sep}`) || !fs.existsSync(filePath)) {
+    return res.status(404).json({ error: "Archivo no encontrado" });
+  }
+
+  res.setHeader("Content-Type", mimeType);
+  res.setHeader("Content-Disposition", `inline; filename="${String(originalName || fileName).replace(/"/g, "")}"`);
+  return res.sendFile(filePath);
+}
+
+function getPublicAppBaseUrl(req) {
+  const configured = String(process.env.PUBLIC_APP_URL || "").replace(/\/+$/, "");
+  if (configured) return configured;
+  const origin = String(req.get("origin") || "").replace(/\/+$/, "");
+  if (origin) return origin;
+  const protocol = req.get("x-forwarded-proto") || req.protocol || "http";
+  const host = req.get("host");
+  return host ? `${protocol}://${host}` : "";
+}
+
+function formatMoney(value) {
+  if (value == null) return "-";
+  return `S/ ${Number(value).toFixed(2)}`;
+}
+
+function buildReviewAlertMessage(registration, race, baseUrl) {
+  const reviewLink = `${baseUrl}/validar-pago/${encodeURIComponent(registration.reviewToken)}`;
+  const runners = (registration.participants || [])
+    .map((participant) => `${participant.nombre} - ${participant.distancia}`)
+    .join(", ");
+  return [
+    `Nueva inscripcion: ${registration.code}`,
+    `Carrera: ${race.name}`,
+    `Contacto: ${registration.contactName} (${registration.contactPhone || registration.contactEmail || "-"})`,
+    `Participantes: ${runners}`,
+    `Total: ${formatMoney(registration.totalAmount)}`,
+    registration.discountCodeText ? `Descuento: ${registration.discountCodeText}` : null,
+    `Validar pago: ${reviewLink}`,
+  ].filter(Boolean).join("\n");
+}
+
+function buildRunnerConfirmationMessage(registration, race) {
+  const runners = (registration.participants || [])
+    .map((participant) => `${participant.nombre} - ${participant.distancia}`)
+    .join(", ");
+  return [
+    `Hola ${registration.contactName}, tu inscripcion fue confirmada.`,
+    `Codigo: ${registration.code}`,
+    `Carrera: ${race.name}`,
+    `Corredor(es): ${runners}`,
+    "Guarda este mensaje como constancia.",
+  ].join("\n");
+}
+
+async function notifyAdminsRegistrationCreated(registration, race, baseUrl) {
+  const raceNumbers = Array.isArray(race?.registrationNotificationPhones)
+    ? race.registrationNotificationPhones.map((phone) => String(phone || "").trim()).filter(Boolean)
+    : [];
+  const adminNumbers = raceNumbers.length > 0 ? raceNumbers : getAdminNumbers();
+  if (adminNumbers.length === 0) return;
+  const message = buildReviewAlertMessage(registration, race, baseUrl);
+  for (const number of adminNumbers) {
+    await sendWhatsAppMessage({ number, message }).catch((error) => {
+      console.error("No se pudo enviar alerta WhatsApp:", error?.message || error);
+      return null;
+    });
+  }
+}
+
+async function notifyRunnerRegistrationApproved(registration, race) {
+  if (!registration.contactPhone) return;
+  const message = buildRunnerConfirmationMessage(registration, race);
+  await sendWhatsAppMessage({ number: registration.contactPhone, message }).catch((error) => {
+    console.error("No se pudo enviar confirmacion WhatsApp:", error?.message || error);
+  });
+}
+
+async function approveRegistration(registrationId, raceId) {
+  const registration = await prisma.registration.findUnique({
+    where: { id: registrationId },
+    include: { participants: true, vouchers: true },
+  });
+  if (!registration || registration.raceId !== raceId) {
+    const error = new Error("Inscripción no encontrada");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (registration.status === "APPROVED") {
+    return registration;
+  }
+
+  const race = await prisma.race.findUnique({ where: { id: raceId } });
+  const documents = registration.participants.map((participant) => normalizeDocument(participant.documento)).filter(Boolean);
+  const documentFilters = documents.map((documento) => ({
+    documento: { equals: documento, mode: "insensitive" },
+  }));
+  const existingParticipants = documents.length > 0
+    ? await prisma.participant.findMany({
+        where: {
+          raceId,
+          OR: documentFilters,
+        },
+        select: { documento: true, nombre: true },
+      })
+    : [];
+  if (existingParticipants.length > 0) {
+    const error = new Error(
+      `Ya existe un participante aprobado con este documento de identidad: ${existingParticipants
+        .map((participant) => `${participant.documento} (${participant.nombre})`)
+        .join("; ")}`
+    );
+    error.statusCode = 409;
+    throw error;
+  }
+
+  return prisma.$transaction(async (tx) => {
+    for (const participant of registration.participants) {
+      const edad = calculateAge(participant.birthDate, race.eventDate || new Date());
+      await tx.participant.upsert({
+        where: {
+          raceId_documento: {
+            raceId,
+            documento: participant.documento,
+          },
+        },
+          update: {
+            nombre: participant.nombre,
+            edad,
+            genero: participant.genero,
+            distancia: participant.distancia,
+          },
+        create: {
+          raceId,
+          documento: participant.documento,
+          nombre: participant.nombre,
+          edad,
+          genero: participant.genero,
+          distancia: participant.distancia,
+        },
+      });
+    }
+
+    return tx.registration.update({
+      where: { id: registrationId },
+      data: {
+        status: "APPROVED",
+        approvedAt: new Date(),
+        rejectedAt: null,
+      },
+      include: {
+        participants: { orderBy: { id: "asc" } },
+        vouchers: { orderBy: { id: "asc" } },
+        discountCode: true,
+      },
+    });
+  });
 }
 
 function serializeFinisher(finisher) {
@@ -1056,6 +1586,10 @@ function normalizeDorsal(value) {
   return /^\d+$/.test(dorsal) && dorsal.length < 3 ? dorsal.padStart(3, "0") : dorsal;
 }
 
+function normalizeDocument(value) {
+  return normalizeText(value).toUpperCase();
+}
+
 function normalizeGender(value) {
   return normalizeText(value).toUpperCase();
 }
@@ -1537,7 +2071,523 @@ app.post("/api/public/:slug/certificate/image", async (req, res) => {
   }
 });
 
+app.get("/api/public/:slug/registration", async (req, res) => {
+  try {
+    const race = await resolveRaceBySlug(req.params.slug);
+    const distances = Array.isArray(race.distances) && race.distances.length > 0
+      ? race.distances
+      : ["5K", "10K"];
+    const categories = await getRaceCategories(race);
+
+    res.json({
+      race: {
+        id: race.id,
+        slug: race.slug,
+        name: race.name,
+        eventDate: race.eventDate,
+        registrationsEnabled: race.registrationsEnabled,
+        discountsEnabled: race.discountsEnabled,
+        registrationPrices: race.registrationPrices ?? null,
+        registrationInstructions: race.registrationInstructions ?? null,
+        registrationPaymentMethods: race.registrationPaymentMethods ?? null,
+        registrationRulesPdfPath: race.registrationRulesPdfPath ?? null,
+        registrationRulesPdfOriginalName: race.registrationRulesPdfOriginalName ?? null,
+        raceLogoPath: race.raceLogoPath ?? null,
+        raceLogoOriginalName: race.raceLogoOriginalName ?? null,
+        categories,
+        distances,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al obtener formulario" });
+  }
+});
+
+app.post("/api/public/:slug/discount-code", async (req, res) => {
+  try {
+    const race = await resolveRaceBySlug(req.params.slug);
+    if (!race.registrationsEnabled) {
+      return res.status(403).json({ error: "Las inscripciones no estan habilitadas para esta carrera" });
+    }
+    if (!race.discountsEnabled) {
+      return res.status(403).json({ error: "Los descuentos no estan habilitados para esta carrera" });
+    }
+
+    const discountCode = await validateDiscountCode(race.id, req.body?.code);
+    if (!discountCode) {
+      return res.status(400).json({ error: "Ingresa un codigo de descuento" });
+    }
+
+    const subtotalAmount = Number(req.body?.subtotalAmount);
+    const discountPercent = Number(discountCode.percent);
+    const discountAmount = Number.isFinite(subtotalAmount) && subtotalAmount > 0
+      ? roundMoney(subtotalAmount * (discountPercent / 100))
+      : null;
+
+    res.json({
+      discountCode: serializeDiscountCode(discountCode),
+      discountAmount,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al validar descuento" });
+  }
+});
+
+app.post("/api/public/:slug/registration", registrationUpload.any(), async (req, res) => {
+  const uploadedFiles = req.files || [];
+  const voucherFiles = uploadedFiles.filter((file) => file.fieldname === "vouchers");
+  const photoFiles = new Map();
+  uploadedFiles.forEach((file) => {
+    const match = String(file.fieldname || "").match(/^participantPhoto_(\d+)$/);
+    if (match) photoFiles.set(Number(match[1]), file);
+  });
+  try {
+    const race = await resolveRaceBySlug(req.params.slug);
+    if (!race.registrationsEnabled) {
+      unlinkUploadedFiles(uploadedFiles);
+      return res.status(403).json({ error: "Las inscripciones no están habilitadas para esta carrera" });
+    }
+
+    const payload = JSON.parse(String(req.body?.payload || "{}"));
+    const contact = payload.contact || {};
+    const participants = Array.isArray(payload.participants) ? payload.participants : [];
+    const paymentMode = payload.paymentMode === "MULTIPLE_VOUCHERS" ? "MULTIPLE_VOUCHERS" : "ONE_VOUCHER";
+    const voucherAmounts = Array.isArray(payload.voucherAmounts) ? payload.voucherAmounts : [];
+    const rulesAccepted = payload.rulesAccepted === true;
+    const requestedDiscountCode = normalizeDiscountCode(payload.discountCode);
+    if (requestedDiscountCode && !race.discountsEnabled) {
+      unlinkUploadedFiles(uploadedFiles);
+      return res.status(403).json({ error: "Los descuentos no estan habilitados para esta carrera" });
+    }
+    const allowedDistances = new Set(
+      (Array.isArray(race.distances) && race.distances.length > 0 ? race.distances : [])
+        .map((distance) => String(distance).trim().toUpperCase())
+    );
+    const priceMap = getRegistrationPriceMap(race);
+    const errors = [];
+
+    const contactName = String(contact.name || "").trim();
+    const contactPhone = String(contact.phone || "").trim();
+    const contactEmail = String(contact.email || "").trim();
+    if (!contactName) errors.push("Ingresa el nombre de contacto");
+    if (!contactPhone && !contactEmail) errors.push("Ingresa un teléfono o correo de contacto");
+    if (participants.length === 0) errors.push("Agrega al menos un participante");
+    if (voucherFiles.length === 0) errors.push("Sube al menos un voucher");
+    if (race.registrationRulesPdfPath && !rulesAccepted) {
+      errors.push("Debes leer y aceptar las bases de la carrera");
+    }
+    if (paymentMode === "MULTIPLE_VOUCHERS" && voucherFiles.length < participants.length) {
+      errors.push("Para pago con vouchers separados, sube un voucher por participante");
+    }
+
+    const seenDocs = new Set();
+    const normalizedParticipants = participants.map((participant, index) => {
+      const row = index + 1;
+      const documento = normalizeDocument(participant.documento);
+      const nombre = String(participant.nombre || "").trim();
+      const birthDate = parseBirthDate(participant.birthDate || participant.fechaNacimiento);
+      const edad = birthDate ? calculateAge(birthDate, race.eventDate || new Date()) : null;
+      const genero = String(participant.genero || "").trim().toUpperCase();
+      const distancia = String(participant.distancia || "").trim().toUpperCase();
+      const procedencia = String(participant.procedencia || "").trim();
+      const bloodType = normalizeBloodType(participant.bloodType);
+      const garmentType = String(participant.garmentType || "").trim().toUpperCase();
+      const garmentSize = String(participant.garmentSize || "").trim().toUpperCase();
+      const club = String(participant.club || "").trim();
+      const emergencyName = String(participant.emergencyName || "").trim();
+      const emergencyPhone = String(participant.emergencyPhone || "").trim();
+      const photo = photoFiles.get(index);
+
+      if (!documento) errors.push(`Participante ${row}: documento de identidad requerido`);
+      if (documento && seenDocs.has(documento)) errors.push(`Participante ${row}: documento de identidad repetido en el formulario`);
+      if (documento) seenDocs.add(documento);
+      if (!nombre) errors.push(`Participante ${row}: nombre requerido`);
+      if (!birthDate || !Number.isFinite(edad) || edad <= 0 || edad > 120) errors.push(`Participante ${row}: fecha de nacimiento inválida`);
+      if (!["M", "F"].includes(genero)) errors.push(`Participante ${row}: género inválido`);
+      if (!distancia) errors.push(`Participante ${row}: distancia requerida`);
+      if (allowedDistances.size > 0 && !allowedDistances.has(distancia)) errors.push(`Participante ${row}: distancia no disponible`);
+      if (!procedencia) errors.push(`Participante ${row}: lugar de procedencia requerido`);
+      if (!bloodType) errors.push(`Participante ${row}: tipo de sangre requerido`);
+      if (!["BIVIDI", "POLO"].includes(garmentType)) errors.push(`Participante ${row}: selecciona bividi o polo`);
+      if (!garmentSize) errors.push(`Participante ${row}: talla requerida`);
+
+      return {
+        documento,
+        nombre,
+        birthDate,
+        genero,
+        distancia,
+        procedencia,
+        bloodType,
+        garmentType,
+        garmentSize,
+        club: club || null,
+        emergencyName: emergencyName || null,
+        emergencyPhone: emergencyPhone || null,
+        photoFileName: photo?.filename || null,
+        photoOriginalName: photo?.originalname || null,
+        photoMimeType: photo?.mimetype || null,
+        photoSizeBytes: photo?.size || null,
+      };
+    });
+
+    if (errors.length > 0) {
+      unlinkUploadedFiles(uploadedFiles);
+      return res.status(400).json({ error: errors.join(". ") });
+    }
+
+    const incomingDocuments = normalizedParticipants.map((participant) => participant.documento);
+    const documentFilters = incomingDocuments.map((documento) => ({
+      documento: { equals: documento, mode: "insensitive" },
+    }));
+
+    const existingParticipants = await prisma.participant.findMany({
+      where: {
+        raceId: race.id,
+        OR: documentFilters,
+      },
+      select: { documento: true, nombre: true },
+    });
+
+    if (existingParticipants.length > 0) {
+      unlinkUploadedFiles(uploadedFiles);
+      const conflicts = existingParticipants.map((participant) => `${participant.documento} (${participant.nombre})`);
+      return res.status(409).json({
+        error: `Ya existe una inscripcion para este documento de identidad: ${conflicts.join("; ")}`,
+      });
+    }
+
+    const existingRegistrations = await prisma.registration.findMany({
+      where: {
+        raceId: race.id,
+        status: { not: "REJECTED" },
+        participants: { some: { OR: documentFilters } },
+      },
+      select: {
+        code: true,
+        participants: {
+          where: { OR: documentFilters },
+          select: { documento: true, nombre: true },
+        },
+      },
+    });
+
+    if (existingRegistrations.length > 0) {
+      unlinkUploadedFiles(uploadedFiles);
+      const conflicts = existingRegistrations.flatMap((registration) => (
+        registration.participants.map((participant) => `${participant.documento} (${participant.nombre}, solicitud ${registration.code})`)
+      ));
+      return res.status(409).json({
+        error: `Ya existe una inscripcion para este documento de identidad: ${conflicts.join("; ")}`,
+      });
+    }
+
+    const subtotalAmount = normalizedParticipants.reduce((sum, participant) => {
+      const price = priceMap.get(participant.distancia);
+      return Number.isFinite(price) ? sum + price : sum;
+    }, 0);
+    const discountCode = requestedDiscountCode
+      ? await validateDiscountCode(race.id, requestedDiscountCode)
+      : null;
+    const discountPercent = discountCode ? Number(discountCode.percent) : 0;
+    const discountAmount = discountCode ? roundMoney(subtotalAmount * (discountPercent / 100)) : 0;
+    const totalAmount = Math.max(0, roundMoney(subtotalAmount - discountAmount));
+
+    const registration = await prisma.registration.create({
+      data: {
+        raceId: race.id,
+        code: buildRegistrationCode(race.id),
+        reviewToken: buildReviewToken(),
+        contactName,
+        contactPhone: contactPhone || null,
+        contactEmail: contactEmail || null,
+        subtotalAmount: subtotalAmount > 0 ? subtotalAmount : null,
+        totalAmount: subtotalAmount > 0 ? totalAmount : null,
+        discountCodeId: discountCode?.id || null,
+        discountCodeText: discountCode?.code || null,
+        discountPercent: discountCode ? discountPercent : null,
+        discountAmount: discountCode ? discountAmount : null,
+        paymentMode,
+        rulesAccepted,
+        rulesAcceptedAt: rulesAccepted ? new Date() : null,
+        notes: String(payload.notes || "").trim() || null,
+        participants: {
+          create: normalizedParticipants,
+        },
+        vouchers: {
+          create: voucherFiles.map((file, index) => ({
+            fileName: file.filename,
+            originalName: file.originalname || file.filename,
+            mimeType: file.mimetype,
+            sizeBytes: file.size,
+            amount: voucherAmounts[index] == null || voucherAmounts[index] === "" ? null : Number(voucherAmounts[index]),
+          })),
+        },
+      },
+      include: { participants: true, vouchers: true },
+    });
+
+    res.json({
+      success: true,
+      registration: serializeRegistration(registration),
+    });
+
+    notifyAdminsRegistrationCreated(registration, race, getPublicAppBaseUrl(req)).catch((error) => {
+      console.error("Error notificando nueva inscripcion por WhatsApp:", error?.message || error);
+    });
+  } catch (err) {
+    unlinkUploadedFiles(uploadedFiles);
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al registrar inscripción" });
+  }
+});
+
+app.get("/api/payment-qrs/:fileName", async (req, res) => {
+  const fileName = path.basename(String(req.params.fileName || ""));
+  if (!fileName) return res.status(404).json({ error: "QR no encontrado" });
+
+  try {
+    const qrPath = `/api/payment-qrs/${encodeURIComponent(fileName)}`;
+    const races = await prisma.race.findMany({
+      select: { registrationPaymentMethods: true },
+    });
+    const isConfigured = races.some((race) => {
+      const wallets = race.registrationPaymentMethods?.digitalWallets;
+      return Array.isArray(wallets) && wallets.some((wallet) => wallet?.qrPath === qrPath);
+    });
+    if (!isConfigured) return res.status(404).json({ error: "QR no encontrado" });
+
+    const filePath = path.join(PAYMENT_QR_UPLOAD_DIR, fileName);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: "QR no encontrado" });
+    return res.sendFile(filePath);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al obtener QR" });
+  }
+});
+
+app.get("/api/race-assets/:fileName", async (req, res) => {
+  const fileName = path.basename(String(req.params.fileName || ""));
+  if (!fileName) return res.status(404).json({ error: "Archivo no encontrado" });
+
+  try {
+    const assetPath = `/api/race-assets/${encodeURIComponent(fileName)}`;
+    const races = await prisma.race.findMany({
+      select: {
+        registrationRulesPdfPath: true,
+        raceLogoPath: true,
+      },
+    });
+    const isConfigured = races.some((race) => (
+      race.registrationRulesPdfPath === assetPath || race.raceLogoPath === assetPath
+    ));
+    if (!isConfigured) return res.status(404).json({ error: "Archivo no encontrado" });
+
+    const filePath = path.join(RACE_ASSET_UPLOAD_DIR, fileName);
+    if (!fs.existsSync(filePath)) return res.status(404).json({ error: "Archivo no encontrado" });
+    return res.sendFile(filePath);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al obtener archivo" });
+  }
+});
+
+app.get("/api/registration-review/:token", async (req, res) => {
+  try {
+    const registration = await prisma.registration.findUnique({
+      where: { reviewToken: String(req.params.token || "") },
+      include: {
+        race: true,
+        participants: { orderBy: { id: "asc" } },
+        vouchers: { orderBy: { id: "asc" } },
+        discountCode: true,
+      },
+    });
+    if (!registration) {
+      return res.status(404).json({ error: "Inscripción no encontrada" });
+    }
+
+    res.json({
+      registration: serializeRegistration(registration),
+      race: serializeRace(registration.race),
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al obtener revisión de pago" });
+  }
+});
+
+app.get("/api/registration-review/:token/vouchers/:voucherId", async (req, res) => {
+  const voucherId = Number.parseInt(req.params.voucherId, 10);
+  if (Number.isNaN(voucherId)) return res.status(400).json({ error: "id inválido" });
+
+  try {
+    const registration = await prisma.registration.findUnique({
+      where: { reviewToken: String(req.params.token || "") },
+      include: { vouchers: true },
+    });
+    if (!registration) {
+      return res.status(404).json({ error: "Inscripción no encontrada" });
+    }
+
+    const voucher = registration.vouchers.find((item) => item.id === voucherId);
+    if (!voucher) {
+      return res.status(404).json({ error: "Voucher no encontrado" });
+    }
+
+    const filePath = path.join(VOUCHER_UPLOAD_DIR, voucher.fileName);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "Archivo no encontrado" });
+    }
+
+    res.setHeader("Content-Type", voucher.mimeType);
+    res.setHeader("Content-Disposition", `inline; filename="${voucher.originalName.replace(/"/g, "")}"`);
+    res.sendFile(filePath);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al obtener voucher" });
+  }
+});
+
+app.get("/api/registration-review/:token/participants/:participantId/photo", async (req, res) => {
+  const participantId = Number.parseInt(req.params.participantId, 10);
+  if (Number.isNaN(participantId)) return res.status(400).json({ error: "id invÃ¡lido" });
+
+  try {
+    const participant = await prisma.registrationParticipant.findUnique({
+      where: { id: participantId },
+      include: { registration: true },
+    });
+    if (!participant || participant.registration.reviewToken !== String(req.params.token || "")) {
+      return res.status(404).json({ error: "Foto no encontrada" });
+    }
+    if (!participant.photoFileName) {
+      return res.status(404).json({ error: "Foto no encontrada" });
+    }
+
+    return sendLocalUpload(
+      res,
+      PARTICIPANT_PHOTO_UPLOAD_DIR,
+      participant.photoFileName,
+      participant.photoOriginalName,
+      participant.photoMimeType
+    );
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al obtener foto" });
+  }
+});
+
+app.post("/api/registration-review/:token/approve", async (req, res) => {
+  try {
+    const current = await prisma.registration.findUnique({
+      where: { reviewToken: String(req.params.token || "") },
+    });
+    if (!current) {
+      return res.status(404).json({ error: "Inscripción no encontrada" });
+    }
+
+    const registration = await approveRegistration(current.id, current.raceId);
+    res.json({ success: true, registration: serializeRegistration(registration) });
+
+    const race = await prisma.race.findUnique({ where: { id: current.raceId } });
+    if (race) {
+      notifyRunnerRegistrationApproved(registration, race).catch((error) => {
+        console.error("Error notificando aprobacion por WhatsApp:", error?.message || error);
+      });
+    }
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al aprobar inscripción" });
+  }
+});
+
+app.post("/api/registration-review/:token/reject", async (req, res) => {
+  try {
+    const current = await prisma.registration.findUnique({
+      where: { reviewToken: String(req.params.token || "") },
+    });
+    if (!current) {
+      return res.status(404).json({ error: "Inscripción no encontrada" });
+    }
+
+    const registration = await prisma.registration.update({
+      where: { id: current.id },
+      data: {
+        status: "REJECTED",
+        rejectedAt: new Date(),
+        notes: String(req.body?.notes || "").trim() || current.notes,
+      },
+      include: {
+        participants: { orderBy: { id: "asc" } },
+        vouchers: { orderBy: { id: "asc" } },
+        discountCode: true,
+      },
+    });
+
+    res.json({ success: true, registration: serializeRegistration(registration) });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al rechazar inscripción" });
+  }
+});
+
+app.use((err, _req, res, next) => {
+  const message = String(err?.message || "");
+  if (err instanceof multer.MulterError || message.includes("Solo se permite") || message.includes("Campo de archivo")) {
+    return res.status(400).json({ error: err.message || "Archivo inválido" });
+  }
+  return next(err);
+});
+
 app.use("/api", requireAuth);
+
+app.get("/api/whatsapp/status", async (_req, res) => {
+  try {
+    await initializeWhatsAppClient().catch(() => {});
+    const status = await getWhatsAppStatus();
+    res.json(status);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al obtener estado de WhatsApp" });
+  }
+});
+
+app.post("/api/whatsapp/restart", async (_req, res) => {
+  try {
+    await restartWhatsAppClient();
+    const status = await getWhatsAppStatus();
+    res.json({ success: true, status });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al reiniciar WhatsApp" });
+  }
+});
+
+app.post("/api/whatsapp/logout", async (_req, res) => {
+  try {
+    const result = await logoutWhatsAppClient();
+    res.json({ success: true, ...result });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al cerrar sesion de WhatsApp" });
+  }
+});
+
+app.post("/api/whatsapp/test", async (req, res) => {
+  try {
+    const number = String(req.body?.number || "").trim();
+    const message = String(req.body?.message || "Prueba de WhatsApp CaxaRunner").trim();
+    if (!number) return res.status(400).json({ error: "Numero requerido" });
+    const result = await sendWhatsAppMessage({ number, message });
+    res.json(result);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Error al enviar WhatsApp de prueba" });
+  }
+});
 
 app.get("/api/races", async (req, res) => {
   try {
@@ -1559,12 +2609,101 @@ app.get("/api/races", async (req, res) => {
   }
 });
 
+app.post("/api/races/:raceId/payment-qr", paymentQrUpload.single("qr"), async (req, res) => {
+  const raceId = Number.parseInt(req.params.raceId, 10);
+  if (Number.isNaN(raceId)) {
+    if (req.file?.path) fs.promises.unlink(req.file.path).catch(() => {});
+    return res.status(400).json({ error: "raceId invalido" });
+  }
+
+  try {
+    const race = await resolveRace({ ...req, params: { raceId } }, { allowBody: false });
+    if (!req.file) return res.status(400).json({ error: "QR requerido" });
+    res.json({
+      success: true,
+      raceId: race.id,
+      qrPath: `/api/payment-qrs/${encodeURIComponent(req.file.filename)}`,
+      originalName: req.file.originalname,
+    });
+  } catch (err) {
+    if (req.file?.path) fs.promises.unlink(req.file.path).catch(() => {});
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al subir QR" });
+  }
+});
+
+app.post("/api/races/:raceId/rules-pdf", raceRulesUpload.single("pdf"), async (req, res) => {
+  const raceId = Number.parseInt(req.params.raceId, 10);
+  if (Number.isNaN(raceId)) {
+    if (req.file?.path) fs.promises.unlink(req.file.path).catch(() => {});
+    return res.status(400).json({ error: "raceId invalido" });
+  }
+
+  try {
+    const race = await resolveRace({ ...req, params: { raceId } }, { allowBody: false });
+    if (!req.file) return res.status(400).json({ error: "PDF requerido" });
+    const updated = await prisma.race.update({
+      where: { id: race.id },
+      data: {
+        registrationRulesPdfPath: `/api/race-assets/${encodeURIComponent(req.file.filename)}`,
+        registrationRulesPdfOriginalName: req.file.originalname || "bases.pdf",
+      },
+    });
+    res.json({ success: true, race: serializeRace(updated) });
+  } catch (err) {
+    if (req.file?.path) fs.promises.unlink(req.file.path).catch(() => {});
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al subir bases" });
+  }
+});
+
+app.post("/api/races/:raceId/logo", raceLogoUpload.single("logo"), async (req, res) => {
+  const raceId = Number.parseInt(req.params.raceId, 10);
+  if (Number.isNaN(raceId)) {
+    if (req.file?.path) fs.promises.unlink(req.file.path).catch(() => {});
+    return res.status(400).json({ error: "raceId invalido" });
+  }
+
+  try {
+    const race = await resolveRace({ ...req, params: { raceId } }, { allowBody: false });
+    if (!req.file) return res.status(400).json({ error: "Logo requerido" });
+    const updated = await prisma.race.update({
+      where: { id: race.id },
+      data: {
+        raceLogoPath: `/api/race-assets/${encodeURIComponent(req.file.filename)}`,
+        raceLogoOriginalName: req.file.originalname || "logo",
+      },
+    });
+    res.json({ success: true, race: serializeRace(updated) });
+  } catch (err) {
+    if (req.file?.path) fs.promises.unlink(req.file.path).catch(() => {});
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al subir logo" });
+  }
+});
+
 app.post("/api/races", async (req, res) => {
   if (req.user.role !== "MASTER") {
     return res.status(403).json({ error: "Sin permisos" });
   }
 
-  const { name, slug, eventDate, categories, distances, publicNotice, certificatesEnabled, showDorsalPublic, certificateTemplate } = req.body;
+  const {
+    name,
+    slug,
+    eventDate,
+    categories,
+    distances,
+    publicNotice,
+    certificatesEnabled,
+    showDorsalPublic,
+    certificateTemplate,
+    registrationsEnabled,
+    discountsEnabled,
+    registrationPrices,
+    registrationInstructions,
+    registrationNotificationPhones,
+    registrationPaymentMethods,
+  } = req.body;
   if (!name || !String(name).trim()) {
     return res.status(400).json({ error: "name requerido" });
   }
@@ -1586,6 +2725,12 @@ app.post("/api/races", async (req, res) => {
         certificatesEnabled: certificatesEnabled !== false,
         showDorsalPublic: showDorsalPublic !== false,
         certificateTemplate: normalizeCertificateTemplate(certificateTemplate),
+        registrationsEnabled: Boolean(registrationsEnabled),
+        discountsEnabled: Boolean(discountsEnabled),
+        registrationPrices: parseRegistrationPrices(registrationPrices),
+        registrationInstructions: registrationInstructions == null ? null : String(registrationInstructions).trim() || null,
+        registrationNotificationPhones: parseNotificationPhones(registrationNotificationPhones),
+        registrationPaymentMethods: parseRegistrationPaymentMethods(registrationPaymentMethods),
         categories: categories ?? DEFAULT_CATEGORIES,
         distances: normalizeDistances(distances),
         status: "DRAFT",
@@ -1757,6 +2902,50 @@ app.put("/api/races/:raceId", async (req, res) => {
       data.certificateTemplate = normalizeCertificateTemplate(req.body.certificateTemplate);
     }
 
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "registrationsEnabled")) {
+      data.registrationsEnabled = Boolean(req.body.registrationsEnabled);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "discountsEnabled")) {
+      data.discountsEnabled = Boolean(req.body.discountsEnabled);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "registrationPrices")) {
+      data.registrationPrices = parseRegistrationPrices(req.body.registrationPrices);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "registrationInstructions")) {
+      data.registrationInstructions = req.body.registrationInstructions == null
+        ? null
+        : String(req.body.registrationInstructions).trim() || null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "registrationNotificationPhones")) {
+      data.registrationNotificationPhones = parseNotificationPhones(req.body.registrationNotificationPhones);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "registrationPaymentMethods")) {
+      data.registrationPaymentMethods = parseRegistrationPaymentMethods(req.body.registrationPaymentMethods);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "registrationRulesPdfPath")) {
+      data.registrationRulesPdfPath = req.body.registrationRulesPdfPath == null
+        ? null
+        : String(req.body.registrationRulesPdfPath).trim() || null;
+      data.registrationRulesPdfOriginalName = data.registrationRulesPdfPath
+        ? String(req.body.registrationRulesPdfOriginalName || "").trim() || null
+        : null;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "raceLogoPath")) {
+      data.raceLogoPath = req.body.raceLogoPath == null
+        ? null
+        : String(req.body.raceLogoPath).trim() || null;
+      data.raceLogoOriginalName = data.raceLogoPath
+        ? String(req.body.raceLogoOriginalName || "").trim() || null
+        : null;
+    }
+
     const updated = await prisma.race.update({
       where: { id: race.id },
       data,
@@ -1766,6 +2955,371 @@ app.put("/api/races/:raceId", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(err.statusCode || 500).json({ error: err.message || "Error al actualizar carrera" });
+  }
+});
+
+app.get("/api/registrations", async (req, res) => {
+  try {
+    const race = await resolveRace(req, { allowBody: false });
+    const status = String(req.query.status || "").trim().toUpperCase();
+    const registrations = await prisma.registration.findMany({
+      where: {
+        raceId: race.id,
+        ...(status ? { status } : {}),
+      },
+      include: {
+        participants: { orderBy: { id: "asc" } },
+        vouchers: { orderBy: { id: "asc" } },
+        discountCode: true,
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    });
+    res.json({ registrations: registrations.map(serializeRegistration), raceId: race.id });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al listar inscripciones" });
+  }
+});
+
+app.get("/api/discount-codes", async (req, res) => {
+  try {
+    const race = await resolveRace(req, { allowBody: false });
+    const discountCodes = await prisma.discountCode.findMany({
+      where: { raceId: race.id },
+      include: {
+        registrations: {
+          where: { status: { not: "REJECTED" } },
+          select: { id: true },
+        },
+      },
+      orderBy: [{ active: "desc" }, { createdAt: "desc" }, { id: "desc" }],
+    });
+
+    res.json({
+      discountCodes: discountCodes.map((discountCode) => serializeDiscountCode({
+        ...discountCode,
+        usedCount: discountCode.registrations.length,
+      })),
+      raceId: race.id,
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al listar descuentos" });
+  }
+});
+
+app.post("/api/discount-codes", async (req, res) => {
+  try {
+    const race = await resolveRace(req);
+    const code = normalizeDiscountCode(req.body?.code);
+    const percent = Number(req.body?.percent);
+    const maxUses = req.body?.maxUses == null || req.body.maxUses === "" ? null : Number.parseInt(req.body.maxUses, 10);
+    const validUntil = parseValidUntil(req.body?.validUntil);
+
+    if (!code) return res.status(400).json({ error: "Codigo requerido" });
+    if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
+      return res.status(400).json({ error: "El porcentaje debe estar entre 1 y 100" });
+    }
+    if (maxUses != null && (!Number.isFinite(maxUses) || maxUses <= 0)) {
+      return res.status(400).json({ error: "El limite de usos debe ser mayor a 0" });
+    }
+    if (req.body?.validUntil && !validUntil) {
+      return res.status(400).json({ error: "Fecha de vencimiento invalida" });
+    }
+
+    const discountCode = await prisma.discountCode.create({
+      data: {
+        raceId: race.id,
+        code,
+        percent,
+        maxUses,
+        validUntil,
+        active: req.body?.active !== false,
+      },
+    });
+    res.json({ success: true, discountCode: serializeDiscountCode({ ...discountCode, usedCount: 0 }) });
+  } catch (err) {
+    console.error(err);
+    if (err.code === "P2002") {
+      return res.status(409).json({ error: "Ya existe un codigo igual para esta carrera" });
+    }
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al crear descuento" });
+  }
+});
+
+app.put("/api/discount-codes/:id", async (req, res) => {
+  const id = Number.parseInt(req.params.id, 10);
+  if (Number.isNaN(id)) return res.status(400).json({ error: "id invalido" });
+
+  try {
+    const race = await resolveRace(req);
+    const current = await prisma.discountCode.findUnique({ where: { id } });
+    if (!current || current.raceId !== race.id) {
+      return res.status(404).json({ error: "Codigo no encontrado" });
+    }
+
+    const data = {};
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "code")) {
+      const code = normalizeDiscountCode(req.body.code);
+      if (!code) return res.status(400).json({ error: "Codigo requerido" });
+      data.code = code;
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "percent")) {
+      const percent = Number(req.body.percent);
+      if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
+        return res.status(400).json({ error: "El porcentaje debe estar entre 1 y 100" });
+      }
+      data.percent = percent;
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "maxUses")) {
+      const maxUses = req.body.maxUses == null || req.body.maxUses === "" ? null : Number.parseInt(req.body.maxUses, 10);
+      if (maxUses != null && (!Number.isFinite(maxUses) || maxUses <= 0)) {
+        return res.status(400).json({ error: "El limite de usos debe ser mayor a 0" });
+      }
+      data.maxUses = maxUses;
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "validUntil")) {
+      const validUntil = parseValidUntil(req.body.validUntil);
+      if (req.body.validUntil && !validUntil) {
+        return res.status(400).json({ error: "Fecha de vencimiento invalida" });
+      }
+      data.validUntil = validUntil;
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "active")) {
+      data.active = Boolean(req.body.active);
+    }
+
+    const discountCode = await prisma.discountCode.update({ where: { id }, data });
+    const usedCount = await countDiscountUses(discountCode.id);
+    res.json({ success: true, discountCode: serializeDiscountCode({ ...discountCode, usedCount }) });
+  } catch (err) {
+    console.error(err);
+    if (err.code === "P2002") {
+      return res.status(409).json({ error: "Ya existe un codigo igual para esta carrera" });
+    }
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al actualizar descuento" });
+  }
+});
+
+app.post("/api/registrations/:id/approve", async (req, res) => {
+  const id = Number.parseInt(req.params.id, 10);
+  if (Number.isNaN(id)) return res.status(400).json({ error: "id inválido" });
+
+  try {
+    const race = await resolveRace(req);
+    const updated = await approveRegistration(id, race.id);
+    res.json({ success: true, registration: serializeRegistration(updated) });
+
+    notifyRunnerRegistrationApproved(updated, race).catch((error) => {
+      console.error("Error notificando aprobacion por WhatsApp:", error?.message || error);
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al aprobar inscripción" });
+  }
+});
+
+app.post("/api/registrations/:id/reject", async (req, res) => {
+  const id = Number.parseInt(req.params.id, 10);
+  if (Number.isNaN(id)) return res.status(400).json({ error: "id inválido" });
+
+  try {
+    const race = await resolveRace(req);
+    const current = await prisma.registration.findUnique({ where: { id } });
+    if (!current || current.raceId !== race.id) {
+      return res.status(404).json({ error: "Inscripción no encontrada" });
+    }
+
+    const registration = await prisma.registration.update({
+      where: { id },
+      data: {
+        status: "REJECTED",
+        rejectedAt: new Date(),
+        notes: String(req.body?.notes || "").trim() || current.notes,
+      },
+      include: {
+        participants: { orderBy: { id: "asc" } },
+        vouchers: { orderBy: { id: "asc" } },
+      },
+    });
+
+    res.json({ success: true, registration: serializeRegistration(registration) });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al rechazar inscripción" });
+  }
+});
+
+app.delete("/api/registrations/:id", async (req, res) => {
+  const id = Number.parseInt(req.params.id, 10);
+  if (Number.isNaN(id)) return res.status(400).json({ error: "id invalido" });
+
+  try {
+    const race = await resolveRace(req);
+    const registration = await prisma.registration.findUnique({
+      where: { id },
+      include: {
+        participants: { orderBy: { id: "asc" } },
+        vouchers: { orderBy: { id: "asc" } },
+      },
+    });
+    if (!registration || registration.raceId !== race.id) {
+      return res.status(404).json({ error: "Inscripcion no encontrada" });
+    }
+
+    const filesToDelete = [
+      ...registration.vouchers.map((voucher) => ({
+        path: path.join(VOUCHER_UPLOAD_DIR, voucher.fileName),
+      })),
+      ...registration.participants
+        .filter((participant) => participant.photoFileName)
+        .map((participant) => ({
+          path: path.join(PARTICIPANT_PHOTO_UPLOAD_DIR, participant.photoFileName),
+        })),
+    ];
+
+    let deletedParticipants = 0;
+    let deletedFinishers = 0;
+
+    await prisma.$transaction(async (tx) => {
+      if (registration.status === "APPROVED") {
+        const documents = [
+          ...new Set(registration.participants.map((participant) => normalizeDocument(participant.documento)).filter(Boolean)),
+        ];
+
+        if (documents.length > 0) {
+          const participants = await tx.participant.findMany({
+            where: {
+              raceId: race.id,
+              OR: documents.map((documento) => ({
+                documento: { equals: documento, mode: "insensitive" },
+              })),
+            },
+            select: { id: true, dorsal: true },
+          });
+
+          const participantIds = participants.map((participant) => participant.id);
+          const dorsals = participants.map((participant) => participant.dorsal).filter(Boolean);
+
+          if (dorsals.length > 0) {
+            const result = await tx.finisher.deleteMany({
+              where: {
+                raceId: race.id,
+                dorsal: { in: dorsals },
+              },
+            });
+            deletedFinishers = result.count;
+          }
+
+          if (participantIds.length > 0) {
+            const result = await tx.participant.deleteMany({
+              where: { id: { in: participantIds } },
+            });
+            deletedParticipants = result.count;
+          }
+        }
+      }
+
+      await tx.registration.delete({ where: { id } });
+    });
+
+    unlinkUploadedFiles(filesToDelete);
+    res.json({ success: true, deletedParticipants, deletedFinishers });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al eliminar inscripcion" });
+  }
+});
+
+app.post("/api/registrations/:id/notify-payment", async (req, res) => {
+  const id = Number.parseInt(req.params.id, 10);
+  if (Number.isNaN(id)) return res.status(400).json({ error: "id invalido" });
+
+  try {
+    const race = await resolveRace(req);
+    const registration = await prisma.registration.findUnique({
+      where: { id },
+      include: {
+        participants: { orderBy: { id: "asc" } },
+        vouchers: { orderBy: { id: "asc" } },
+        discountCode: true,
+      },
+    });
+    if (!registration || registration.raceId !== race.id) {
+      return res.status(404).json({ error: "Inscripcion no encontrada" });
+    }
+
+    const baseUrl = String(req.body?.baseUrl || process.env.PUBLIC_APP_URL || "").replace(/\/+$/, "");
+    const finalBaseUrl = baseUrl || getPublicAppBaseUrl(req);
+    await notifyAdminsRegistrationCreated(registration, race, finalBaseUrl);
+    res.json({ success: true, message: "Alerta reenviada a contactos configurados." });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al reenviar alerta" });
+  }
+});
+
+app.get("/api/registrations/:registrationId/vouchers/:voucherId", async (req, res) => {
+  const registrationId = Number.parseInt(req.params.registrationId, 10);
+  const voucherId = Number.parseInt(req.params.voucherId, 10);
+  if (Number.isNaN(registrationId) || Number.isNaN(voucherId)) {
+    return res.status(400).json({ error: "id inválido" });
+  }
+
+  try {
+    const race = await resolveRace(req, { allowBody: false });
+    const voucher = await prisma.registrationVoucher.findUnique({
+      where: { id: voucherId },
+      include: { registration: true },
+    });
+    if (!voucher || voucher.registrationId !== registrationId || voucher.registration.raceId !== race.id) {
+      return res.status(404).json({ error: "Voucher no encontrado" });
+    }
+
+    const filePath = path.join(VOUCHER_UPLOAD_DIR, voucher.fileName);
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: "Archivo no encontrado" });
+    }
+
+    res.setHeader("Content-Type", voucher.mimeType);
+    res.setHeader("Content-Disposition", `inline; filename="${voucher.originalName.replace(/"/g, "")}"`);
+    res.sendFile(filePath);
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al obtener voucher" });
+  }
+});
+
+app.get("/api/registrations/:registrationId/participants/:participantId/photo", async (req, res) => {
+  const registrationId = Number.parseInt(req.params.registrationId, 10);
+  const participantId = Number.parseInt(req.params.participantId, 10);
+  if (Number.isNaN(registrationId) || Number.isNaN(participantId)) {
+    return res.status(400).json({ error: "id invÃ¡lido" });
+  }
+
+  try {
+    const race = await resolveRace(req, { allowBody: false });
+    const participant = await prisma.registrationParticipant.findUnique({
+      where: { id: participantId },
+      include: { registration: true },
+    });
+    if (!participant || participant.registrationId !== registrationId || participant.registration.raceId !== race.id) {
+      return res.status(404).json({ error: "Foto no encontrada" });
+    }
+    if (!participant.photoFileName) {
+      return res.status(404).json({ error: "Foto no encontrada" });
+    }
+
+    return sendLocalUpload(
+      res,
+      PARTICIPANT_PHOTO_UPLOAD_DIR,
+      participant.photoFileName,
+      participant.photoOriginalName,
+      participant.photoMimeType
+    );
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al obtener foto" });
   }
 });
 
@@ -1851,7 +3405,7 @@ app.post("/api/participants", async (req, res) => {
             raceId: race.id,
             documento: participant.documento,
             nombre: participant.nombre,
-            edad: participant.edad,
+            edad: calculateAge(participant.birthDate, race.eventDate || new Date()),
             genero: participant.genero,
             distancia: participant.distancia,
             dorsal: participant.dorsal,
@@ -2048,6 +3602,36 @@ app.put("/api/participants/:id", async (req, res) => {
     }
     console.error(err);
     res.status(err.statusCode || 500).json({ error: err.message || "Error al actualizar participante" });
+  }
+});
+
+app.delete("/api/participants/:id", async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (Number.isNaN(id)) return res.status(400).json({ error: "id invalido" });
+
+  try {
+    const race = await resolveRace(req);
+    const participant = await prisma.participant.findUnique({ where: { id } });
+    if (!participant || participant.raceId !== race.id) {
+      return res.status(404).json({ error: "Participante no encontrado" });
+    }
+
+    const deleted = await prisma.$transaction(async (tx) => {
+      if (participant.dorsal) {
+        await tx.finisher.deleteMany({
+          where: {
+            raceId: race.id,
+            dorsal: participant.dorsal,
+          },
+        });
+      }
+      return tx.participant.delete({ where: { id } });
+    });
+
+    res.json({ success: true, participant: deleted });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al eliminar participante" });
   }
 });
 
@@ -2500,6 +4084,14 @@ app.put("/api/config/categories", async (req, res) => {
     console.error(err);
     res.status(err.statusCode || 500).json({ error: err.message || "Error al guardar categorias" });
   }
+});
+
+app.use((err, _req, res, next) => {
+  const message = String(err?.message || "");
+  if (err instanceof multer.MulterError || message.includes("Solo se permite") || message.includes("Campo de archivo")) {
+    return res.status(400).json({ error: err.message || "Archivo invalido" });
+  }
+  return next(err);
 });
 
 const PORT = process.env.PORT || 3001;
