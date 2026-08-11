@@ -6,6 +6,7 @@ const qrcode = require("qrcode-terminal");
 const CLIENT_ID = "caxarunner-main";
 const SESSION_DIR = path.resolve(__dirname, "..", ".wwebjs_auth");
 const CACHE_DIR = path.resolve(__dirname, "..", ".wwebjs_cache");
+const SEND_INTERVAL_MS = Number.parseInt(process.env.WHATSAPP_SEND_INTERVAL_MS || "30000", 10);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -15,18 +16,28 @@ const entry = {
   initializing: null,
   isReady: false,
   manualLogout: false,
+  lastSendAt: 0,
+  sendQueue: Promise.resolve(),
 };
 
 if (!process.__caxaRunnerWhatsappErrorGuards) {
   process.__caxaRunnerWhatsappErrorGuards = true;
   const isKnownShutdownError = (error) => {
     const message = String(error?.message || error || "");
-    return message.includes("Attempted to use detached Frame") || message.includes("EBUSY: resource busy or locked");
+    return (
+      message.includes("Attempted to use detached Frame") ||
+      message.includes("Execution context was destroyed") ||
+      message.includes("Protocol error") ||
+      message.includes("Target closed") ||
+      message.includes("Session closed") ||
+      message.includes("EBUSY: resource busy or locked")
+    );
   };
 
   process.on("unhandledRejection", (error) => {
     if (isKnownShutdownError(error)) {
-      console.warn("WhatsApp ignoro un error de cierre de Chromium:", error?.message || error);
+      entry.isReady = false;
+      console.warn("WhatsApp ignoro un error transitorio de Chromium:", error?.message || error);
       return;
     }
     throw error;
@@ -34,7 +45,8 @@ if (!process.__caxaRunnerWhatsappErrorGuards) {
 
   process.on("uncaughtException", (error) => {
     if (isKnownShutdownError(error)) {
-      console.warn("WhatsApp ignoro un error de cierre de Chromium:", error?.message || error);
+      entry.isReady = false;
+      console.warn("WhatsApp ignoro un error transitorio de Chromium:", error?.message || error);
       return;
     }
     throw error;
@@ -77,7 +89,9 @@ async function isClientUsable(client) {
   if (!client) return false;
   const state = await client.getState().catch(() => null);
   if (state !== "CONNECTED") return false;
-  return client.pupPage?.evaluate(() => {
+  const page = client.pupPage;
+  if (!page || page.isClosed?.()) return false;
+  return page.evaluate(() => {
     try {
       const collections = window.require?.("WAWebCollections");
       const findChatAction = window.require?.("WAWebFindChatAction");
@@ -98,17 +112,51 @@ async function isClientUsable(client) {
 
 async function resolveChatIdsFromNumber(client, raw) {
   const normalized = normalizePhoneNumber(raw);
-  const chatIds = [`${normalized}@c.us`];
-  const numberId = await client.getNumberId(normalized).catch(() => null);
-
-  if (numberId?._serialized && !chatIds.includes(numberId._serialized)) {
-    if (String(numberId._serialized).endsWith("@lid")) {
-      chatIds.unshift(numberId._serialized);
-    } else {
-      chatIds.push(numberId._serialized);
+  let numberId = null;
+  try {
+    numberId = await client.getNumberId(normalized);
+  } catch (error) {
+    const message = String(error?.message || error || "");
+    if (
+      message.includes("Execution context was destroyed") ||
+      message.includes("Target closed") ||
+      message.includes("Session closed") ||
+      message.includes("Protocol error")
+    ) {
+      throw new Error("No se pudo verificar el numero porque WhatsApp se esta reconectando.");
     }
+    throw new Error("No se pudo verificar si el numero tiene WhatsApp.");
+  }
+
+  if (!numberId?._serialized) {
+    throw new Error(`El numero ${normalized} no tiene WhatsApp o no esta disponible.`);
+  }
+
+  const chatIds = [numberId._serialized];
+  const phoneChatId = `${normalized}@c.us`;
+  if (!chatIds.includes(phoneChatId) && !String(numberId._serialized).endsWith("@lid")) {
+    chatIds.push(phoneChatId);
   }
   return chatIds;
+}
+
+function enqueueSend(task) {
+  const interval = Number.isFinite(SEND_INTERVAL_MS) && SEND_INTERVAL_MS > 0 ? SEND_INTERVAL_MS : 30000;
+  const run = entry.sendQueue.catch(() => {}).then(async () => {
+    const elapsed = Date.now() - entry.lastSendAt;
+    if (entry.lastSendAt > 0 && elapsed < interval) {
+      await sleep(interval - elapsed);
+    }
+
+    try {
+      return await task();
+    } finally {
+      entry.lastSendAt = Date.now();
+    }
+  });
+
+  entry.sendQueue = run.catch(() => {});
+  return run;
 }
 
 function configureClient(client) {
@@ -213,7 +261,9 @@ async function initializeClient({ force = false } = {}) {
       console.log("Cliente WhatsApp inicializado.");
       return client;
     } catch (error) {
+      entry.isReady = false;
       if (entry.client === client) entry.client = null;
+      await client.destroy().catch(() => {});
       console.error("Error al inicializar WhatsApp:", error?.message || error);
       setTimeout(() => initializeClient().catch(() => {}), 5000);
       throw error;
@@ -229,6 +279,10 @@ async function sendMessage({ number, message, filePath, caption }) {
   if (!number) throw new Error("El numero de telefono es obligatorio.");
   if (!message && !filePath) throw new Error("Debe proporcionar un mensaje o archivo.");
 
+  return enqueueSend(() => sendMessageNow({ number, message, filePath, caption }));
+}
+
+async function sendMessageNow({ number, message, filePath, caption }) {
   try {
     if (!entry.client) await initializeClient();
 
