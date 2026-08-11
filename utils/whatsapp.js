@@ -6,7 +6,6 @@ const qrcode = require("qrcode-terminal");
 const CLIENT_ID = "caxarunner-main";
 const SESSION_DIR = path.resolve(__dirname, "..", ".wwebjs_auth");
 const CACHE_DIR = path.resolve(__dirname, "..", ".wwebjs_cache");
-const SEND_INTERVAL_MS = Number.parseInt(process.env.WHATSAPP_SEND_INTERVAL_MS || "30000", 10);
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -16,8 +15,6 @@ const entry = {
   initializing: null,
   isReady: false,
   manualLogout: false,
-  lastSendAt: 0,
-  sendQueue: Promise.resolve(),
 };
 
 if (!process.__caxaRunnerWhatsappErrorGuards) {
@@ -140,25 +137,6 @@ async function resolveChatIdsFromNumber(client, raw) {
   return chatIds;
 }
 
-function enqueueSend(task) {
-  const interval = Number.isFinite(SEND_INTERVAL_MS) && SEND_INTERVAL_MS > 0 ? SEND_INTERVAL_MS : 30000;
-  const run = entry.sendQueue.catch(() => {}).then(async () => {
-    const elapsed = Date.now() - entry.lastSendAt;
-    if (entry.lastSendAt > 0 && elapsed < interval) {
-      await sleep(interval - elapsed);
-    }
-
-    try {
-      return await task();
-    } finally {
-      entry.lastSendAt = Date.now();
-    }
-  });
-
-  entry.sendQueue = run.catch(() => {});
-  return run;
-}
-
 function configureClient(client) {
   client.removeAllListeners();
 
@@ -278,11 +256,6 @@ async function initializeClient({ force = false } = {}) {
 async function sendMessage({ number, message, filePath, caption }) {
   if (!number) throw new Error("El numero de telefono es obligatorio.");
   if (!message && !filePath) throw new Error("Debe proporcionar un mensaje o archivo.");
-
-  return enqueueSend(() => sendMessageNow({ number, message, filePath, caption }));
-}
-
-async function sendMessageNow({ number, message, filePath, caption }) {
   try {
     if (!entry.client) await initializeClient();
 

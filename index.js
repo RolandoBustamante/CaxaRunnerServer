@@ -24,6 +24,8 @@ const VOUCHER_UPLOAD_DIR = path.join(__dirname, "uploads", "registration-voucher
 const PARTICIPANT_PHOTO_UPLOAD_DIR = path.join(__dirname, "uploads", "participant-photos");
 const PAYMENT_QR_UPLOAD_DIR = path.join(__dirname, "uploads", "payment-qrs");
 const RACE_ASSET_UPLOAD_DIR = path.join(__dirname, "uploads", "race-assets");
+const MULTI_WHATSAPP_SEND_DELAY_MS = 10000;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const DEFAULT_RACE_SLUG = "carrera-actual";
 const DEFAULT_CATEGORIES = [
@@ -607,7 +609,8 @@ async function notifyAdminsRegistrationCreated(registration, race, baseUrl) {
   const adminNumbers = raceNumbers.length > 0 ? raceNumbers : getAdminNumbers();
   if (adminNumbers.length === 0) return;
   const message = buildReviewAlertMessage(registration, race, baseUrl);
-  for (const number of adminNumbers) {
+  for (const [index, number] of adminNumbers.entries()) {
+    if (index > 0) await sleep(MULTI_WHATSAPP_SEND_DELAY_MS);
     await sendWhatsAppMessage({ number, message }).catch((error) => {
       console.error("No se pudo enviar alerta WhatsApp:", error?.message || error);
       return null;
@@ -3256,6 +3259,37 @@ app.post("/api/registrations/:id/notify-payment", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(err.statusCode || 500).json({ error: err.message || "Error al reenviar alerta" });
+  }
+});
+
+app.post("/api/registrations/:id/notify-confirmation", async (req, res) => {
+  const id = Number.parseInt(req.params.id, 10);
+  if (Number.isNaN(id)) return res.status(400).json({ error: "id invalido" });
+
+  try {
+    const race = await resolveRace(req);
+    const registration = await prisma.registration.findUnique({
+      where: { id },
+      include: {
+        participants: { orderBy: { id: "asc" } },
+        vouchers: { orderBy: { id: "asc" } },
+      },
+    });
+    if (!registration || registration.raceId !== race.id) {
+      return res.status(404).json({ error: "Inscripcion no encontrada" });
+    }
+    if (registration.status !== "APPROVED") {
+      return res.status(400).json({ error: "Solo se puede enviar confirmacion de inscripciones aprobadas" });
+    }
+    if (!registration.contactPhone) {
+      return res.status(400).json({ error: "La inscripcion no tiene telefono de contacto" });
+    }
+
+    await notifyRunnerRegistrationApproved(registration, race);
+    res.json({ success: true, message: "Confirmacion enviada al corredor." });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al enviar confirmacion" });
   }
 });
 
