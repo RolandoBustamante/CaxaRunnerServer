@@ -619,11 +619,15 @@ async function notifyAdminsRegistrationCreated(registration, race, baseUrl) {
 }
 
 async function notifyRunnerRegistrationApproved(registration, race) {
-  if (!registration.contactPhone) return;
+  if (!registration.contactPhone) {
+    return { success: false, message: "La inscripcion no tiene telefono de contacto" };
+  }
   const message = buildRunnerConfirmationMessage(registration, race);
-  await sendWhatsAppMessage({ number: registration.contactPhone, message }).catch((error) => {
-    console.error("No se pudo enviar confirmacion WhatsApp:", error?.message || error);
-  });
+  const result = await sendWhatsAppMessage({ number: registration.contactPhone, message });
+  if (!result.success) {
+    console.error("No se pudo enviar confirmacion WhatsApp:", result.error || result.message);
+  }
+  return result;
 }
 
 async function approveRegistration(registrationId, raceId) {
@@ -3285,7 +3289,10 @@ app.post("/api/registrations/:id/notify-confirmation", async (req, res) => {
       return res.status(400).json({ error: "La inscripcion no tiene telefono de contacto" });
     }
 
-    await notifyRunnerRegistrationApproved(registration, race);
+    const result = await notifyRunnerRegistrationApproved(registration, race);
+    if (!result?.success) {
+      return res.status(400).json({ error: result?.error || result?.message || "No se pudo enviar la confirmacion" });
+    }
     res.json({ success: true, message: "Confirmacion enviada al corredor." });
   } catch (err) {
     console.error(err);
