@@ -3236,6 +3236,9 @@ app.post("/api/registrations/:id/reject", async (req, res) => {
 app.delete("/api/registrations/:id", async (req, res) => {
   const id = Number.parseInt(req.params.id, 10);
   if (Number.isNaN(id)) return res.status(400).json({ error: "id invalido" });
+  if (req.user?.role !== "MASTER") {
+    return res.status(403).json({ error: "Solo un usuario MASTER puede eliminar inscripciones" });
+  }
 
   try {
     const race = await resolveRace(req);
