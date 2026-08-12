@@ -5,6 +5,7 @@ const fs = require("fs");
 const path = require("path");
 const multer = require("multer");
 const crypto = require("crypto");
+const sharp = require("sharp");
 
 const { PrismaClient } = require("./generated/prisma");
 const requireAuth = require("./middleware/auth");
@@ -18,6 +19,11 @@ const {
   sendMessage: sendWhatsAppMessage,
 } = require("./utils/whatsapp");
 
+function parsePositiveNumber(value, fallback) {
+  const number = Number(value);
+  return Number.isFinite(number) && number > 0 ? number : fallback;
+}
+
 const prisma = new PrismaClient();
 const app = express();
 const VOUCHER_UPLOAD_DIR = path.join(__dirname, "uploads", "registration-vouchers");
@@ -26,6 +32,13 @@ const PAYMENT_QR_UPLOAD_DIR = path.join(__dirname, "uploads", "payment-qrs");
 const RACE_ASSET_UPLOAD_DIR = path.join(__dirname, "uploads", "race-assets");
 const MULTI_WHATSAPP_SEND_DELAY_MS = 10000;
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const REGISTRATION_VOUCHER_MAX_UPLOAD_MB = parsePositiveNumber(process.env.REGISTRATION_VOUCHER_MAX_UPLOAD_MB, 8);
+const PARTICIPANT_PHOTO_MAX_UPLOAD_MB = parsePositiveNumber(process.env.PARTICIPANT_PHOTO_MAX_UPLOAD_MB, 20);
+const PARTICIPANT_PHOTO_MAX_DIMENSION = parsePositiveNumber(process.env.PARTICIPANT_PHOTO_MAX_DIMENSION, 1600);
+const PARTICIPANT_PHOTO_JPEG_QUALITY = Math.min(
+  95,
+  Math.max(60, parsePositiveNumber(process.env.PARTICIPANT_PHOTO_JPEG_QUALITY, 85))
+);
 
 const DEFAULT_RACE_SLUG = "carrera-actual";
 const DEFAULT_CATEGORIES = [
@@ -61,7 +74,7 @@ const registrationUpload = multer({
     },
   }),
   limits: {
-    fileSize: 8 * 1024 * 1024,
+    fileSize: PARTICIPANT_PHOTO_MAX_UPLOAD_MB * 1024 * 1024,
     files: 30,
   },
   fileFilter: (_req, file, cb) => {
@@ -556,6 +569,54 @@ function sendLocalUpload(res, directory, fileName, originalName, mimeType) {
   res.setHeader("Content-Type", mimeType);
   res.setHeader("Content-Disposition", `inline; filename="${String(originalName || fileName).replace(/"/g, "")}"`);
   return res.sendFile(filePath);
+}
+
+async function optimizeParticipantPhoto(file) {
+  if (!file?.path) return null;
+
+  const parsedPath = path.parse(file.path);
+  const outputFileName = `${parsedPath.name}.jpg`;
+  const outputPath = path.join(parsedPath.dir, outputFileName);
+  const tempPath = path.join(parsedPath.dir, `${parsedPath.name}-optimized-${Date.now()}.jpg`);
+
+  await sharp(file.path, { failOn: "none" })
+    .rotate()
+    .resize({
+      width: PARTICIPANT_PHOTO_MAX_DIMENSION,
+      height: PARTICIPANT_PHOTO_MAX_DIMENSION,
+      fit: "inside",
+      withoutEnlargement: true,
+    })
+    .jpeg({
+      quality: PARTICIPANT_PHOTO_JPEG_QUALITY,
+      mozjpeg: true,
+    })
+    .toFile(tempPath);
+
+  if (outputPath !== file.path) {
+    await fs.promises.unlink(file.path).catch(() => {});
+  }
+  await fs.promises.rename(tempPath, outputPath);
+
+  const stats = await fs.promises.stat(outputPath);
+  file.path = outputPath;
+  file.filename = outputFileName;
+  file.mimetype = "image/jpeg";
+  file.size = stats.size;
+  file.originalname = String(file.originalname || outputFileName).replace(/\.[a-z0-9]+$/i, ".jpg");
+  return file;
+}
+
+async function optimizeParticipantPhotos(photoFiles) {
+  for (const [index, file] of photoFiles.entries()) {
+    try {
+      await optimizeParticipantPhoto(file);
+    } catch (error) {
+      const wrapped = new Error(`Participante ${index + 1}: no se pudo procesar la foto. Sube una imagen JPG, PNG o WEBP valida.`);
+      wrapped.cause = error;
+      throw wrapped;
+    }
+  }
 }
 
 function getPublicAppBaseUrl(req) {
@@ -2182,6 +2243,11 @@ app.post("/api/public/:slug/registration", registrationUpload.any(), async (req,
     if (!contactPhone && !contactEmail) errors.push("Ingresa un teléfono o correo de contacto");
     if (participants.length === 0) errors.push("Agrega al menos un participante");
     if (voucherFiles.length === 0) errors.push("Sube al menos un voucher");
+    voucherFiles.forEach((file, index) => {
+      if (file.size > REGISTRATION_VOUCHER_MAX_UPLOAD_MB * 1024 * 1024) {
+        errors.push(`Voucher ${index + 1}: el archivo no debe superar ${REGISTRATION_VOUCHER_MAX_UPLOAD_MB} MB`);
+      }
+    });
     if (race.registrationRulesPdfPath && !rulesAccepted) {
       errors.push("Debes leer y aceptar las bases de la carrera");
     }
@@ -2244,6 +2310,16 @@ app.post("/api/public/:slug/registration", registrationUpload.any(), async (req,
       unlinkUploadedFiles(uploadedFiles);
       return res.status(400).json({ error: errors.join(". ") });
     }
+
+    await optimizeParticipantPhotos(photoFiles);
+    normalizedParticipants.forEach((participant, index) => {
+      const photo = photoFiles.get(index);
+      if (!photo) return;
+      participant.photoFileName = photo.filename;
+      participant.photoOriginalName = photo.originalname || photo.filename;
+      participant.photoMimeType = photo.mimetype;
+      participant.photoSizeBytes = photo.size;
+    });
 
     const incomingDocuments = normalizedParticipants.map((participant) => participant.documento);
     const documentFilters = incomingDocuments.map((documento) => ({
