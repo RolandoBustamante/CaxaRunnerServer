@@ -15,6 +15,8 @@ const {
   getWhatsAppStatus,
   initializeClient: initializeWhatsAppClient,
   logoutClient: logoutWhatsAppClient,
+  requestPairingCode: requestWhatsAppPairingCode,
+  cancelPairingCode: cancelWhatsAppPairingCode,
   restartClient: restartWhatsAppClient,
   sendMessage: sendWhatsAppMessage,
 } = require("./utils/whatsapp");
@@ -2656,6 +2658,30 @@ app.post("/api/whatsapp/logout", async (_req, res) => {
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Error al cerrar sesion de WhatsApp" });
+  }
+});
+
+app.post("/api/whatsapp/pairing-code", async (req, res) => {
+  try {
+    const phoneNumber = String(req.body?.phoneNumber || "").trim();
+    if (!phoneNumber) return res.status(400).json({ error: "Numero requerido" });
+    const result = await requestWhatsAppPairingCode(phoneNumber);
+    const status = await getWhatsAppStatus();
+    res.json({ ...result, status });
+  } catch (err) {
+    console.error("Error generando codigo WhatsApp:", err?.message || err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al generar codigo de vinculacion" });
+  }
+});
+
+app.post("/api/whatsapp/pairing-code/cancel", async (_req, res) => {
+  try {
+    const result = await cancelWhatsAppPairingCode();
+    const status = await getWhatsAppStatus();
+    res.json({ ...result, status });
+  } catch (err) {
+    console.error("Error cancelando codigo WhatsApp:", err?.message || err);
+    res.status(500).json({ error: "Error al cancelar codigo de vinculacion" });
   }
 });
 

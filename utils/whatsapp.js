@@ -12,6 +12,10 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const entry = {
   client: null,
   currentQR: null,
+  pairingCode: null,
+  pairingPhone: null,
+  pairingRequestedAt: null,
+  pairingError: null,
   initializing: null,
   isReady: false,
   manualLogout: false,
@@ -149,8 +153,17 @@ function configureClient(client) {
     } catch {}
   });
 
+  client.on("code", (code) => {
+    entry.pairingCode = code;
+    entry.pairingError = null;
+    entry.pairingRequestedAt = new Date().toISOString();
+    console.log("Codigo de vinculacion WhatsApp generado.");
+  });
+
   client.on("ready", async () => {
     entry.currentQR = null;
+    entry.pairingCode = null;
+    entry.pairingError = null;
     entry.manualLogout = false;
     await sleep(1200);
     entry.isReady = await isClientUsable(client);
@@ -158,6 +171,8 @@ function configureClient(client) {
   });
 
   client.on("authenticated", () => {
+    entry.pairingCode = null;
+    entry.pairingError = null;
     console.log("Sesion WhatsApp autenticada.");
   });
 
@@ -170,6 +185,7 @@ function configureClient(client) {
     const normalizedReason = String(reason || "").toUpperCase();
     entry.isReady = false;
     entry.currentQR = null;
+    entry.pairingCode = null;
     if (normalizedReason === "LOGOUT") entry.manualLogout = true;
     console.error("WhatsApp desconectado:", normalizedReason);
 
@@ -191,6 +207,10 @@ async function destroyClient(logout = false) {
   } catch {}
   entry.client = null;
   entry.currentQR = null;
+  entry.pairingCode = null;
+  entry.pairingPhone = null;
+  entry.pairingRequestedAt = null;
+  entry.pairingError = null;
   entry.isReady = false;
   entry.initializing = null;
 }
@@ -253,6 +273,97 @@ async function initializeClient({ force = false } = {}) {
   return entry.initializing;
 }
 
+function normalizePairingError(error) {
+  const message = String(error?.message || error || "");
+  if (message.includes("rate-overlimit") || message.includes("429")) {
+    return "WhatsApp limito los intentos de codigo. Espera unos minutos o usa el QR.";
+  }
+  if (
+    message.includes("Execution context was destroyed") ||
+    message.includes("Target closed") ||
+    message.includes("Session closed") ||
+    message.includes("Protocol error")
+  ) {
+    return "WhatsApp Web se esta reconectando. Espera unos segundos e intenta otra vez.";
+  }
+  return message || "No se pudo generar el codigo de vinculacion.";
+}
+
+async function waitUntilPairingAvailable(maxMs = 20000) {
+  const start = Date.now();
+  while (Date.now() - start < maxMs) {
+    const page = entry.client?.pupPage;
+    if (page && !page.isClosed?.()) {
+      const ready = await page.evaluate(() => {
+        try {
+          return Boolean(window.AuthStore?.PairingCodeLinkUtils?.startAltLinkingFlow);
+        } catch {
+          return false;
+        }
+      }).catch(() => false);
+      if (ready) return true;
+    }
+    await sleep(750);
+  }
+  return false;
+}
+
+async function requestPairingCode(rawPhoneNumber) {
+  const phoneNumber = normalizePhoneNumber(rawPhoneNumber);
+  if (!entry.client) await initializeClient();
+  if (entry.initializing) await entry.initializing;
+
+  const state = entry.client ? await entry.client.getState().catch(() => null) : null;
+  if (state === "CONNECTED") {
+    throw new Error("WhatsApp ya esta conectado.");
+  }
+  if (!entry.client?.requestPairingCode) {
+    throw new Error("Esta version de whatsapp-web.js no soporta codigo de vinculacion.");
+  }
+  const pairingAvailable = await waitUntilPairingAvailable();
+  if (!pairingAvailable) {
+    throw new Error("WhatsApp Web aun no cargo la vinculacion por codigo. Intenta nuevamente en unos segundos.");
+  }
+
+  entry.pairingPhone = phoneNumber;
+  entry.pairingCode = null;
+  entry.pairingError = null;
+  entry.pairingRequestedAt = new Date().toISOString();
+
+  let lastError = null;
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const code = await entry.client.requestPairingCode(phoneNumber, true, 180000);
+      entry.pairingCode = code;
+      entry.pairingError = null;
+      entry.pairingRequestedAt = new Date().toISOString();
+      return {
+        success: true,
+        phoneNumber,
+        code,
+        requestedAt: entry.pairingRequestedAt,
+      };
+    } catch (error) {
+      lastError = error;
+      await sleep(1200);
+    }
+  }
+
+  entry.pairingError = normalizePairingError(lastError);
+  throw new Error(entry.pairingError);
+}
+
+async function cancelPairingCode() {
+  if (entry.client?.cancelPairingCode) {
+    await entry.client.cancelPairingCode().catch(() => {});
+  }
+  entry.pairingCode = null;
+  entry.pairingPhone = null;
+  entry.pairingRequestedAt = null;
+  entry.pairingError = null;
+  return { success: true };
+}
+
 async function sendMessage({ number, message, filePath, caption }) {
   if (!number) throw new Error("El numero de telefono es obligatorio.");
   if (!message && !filePath) throw new Error("Debe proporcionar un mensaje o archivo.");
@@ -299,6 +410,10 @@ async function getWhatsAppStatus() {
     loggedIn: state === "CONNECTED",
     state,
     qr: entry.currentQR,
+    pairingCode: entry.pairingCode,
+    pairingPhone: entry.pairingPhone,
+    pairingRequestedAt: entry.pairingRequestedAt,
+    pairingError: entry.pairingError,
     isReady: entry.isReady,
   };
 }
@@ -328,6 +443,8 @@ module.exports = {
   getWhatsAppStatus,
   initializeClient,
   logoutClient,
+  requestPairingCode,
+  cancelPairingCode,
   restartClient,
   sendMessage,
 };
