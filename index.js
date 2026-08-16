@@ -405,11 +405,14 @@ function parseNotificationPhones(value) {
   const contacts = [];
 
   source.forEach((item) => {
-    const phone = String(typeof item === "object" && item !== null ? item.phone : item || "").replace(/\D/g, "");
+    const rawPhone = typeof item === "object" && item !== null
+      ? item.phone ?? item.number ?? item.numero ?? item.telefono ?? item.phoneNumber
+      : item;
+    const phone = String(rawPhone || "").replace(/\D/g, "");
     if (phone.length < 9 || seen.has(phone)) return;
     seen.add(phone);
     const name = typeof item === "object" && item !== null
-      ? String(item.name || "").trim().replace(/\s+/g, " ").slice(0, 80)
+      ? String(item.name || item.nombre || item.label || "").trim().replace(/\s+/g, " ").slice(0, 80)
       : "";
     contacts.push(name ? { name, phone } : { phone });
   });
@@ -686,18 +689,29 @@ async function notifyAdminsRegistrationCreated(registration, race, baseUrl) {
   const adminContacts = raceContacts.length > 0 ? raceContacts : fallbackContacts;
   if (adminContacts.length === 0) return;
   const message = buildReviewAlertMessage(registration, race, baseUrl);
+  const results = [];
   for (const [index, contact] of adminContacts.entries()) {
     if (index > 0) await sleep(MULTI_WHATSAPP_SEND_DELAY_MS);
-    await sendWhatsAppMessage({
+    const result = await sendWhatsAppMessage({
       number: contact.phone,
       message,
       contactName: contact.name || `Validador ${index + 1}`,
       contactPrefix: race?.whatsappContactPrefix,
     }).catch((error) => {
       console.error("No se pudo enviar alerta WhatsApp:", error?.message || error);
-      return null;
+      return { success: false, error: error?.message || String(error) };
     });
+    results.push({
+      phone: contact.phone,
+      name: contact.name || `Validador ${index + 1}`,
+      success: result?.success === true,
+      error: result?.error || result?.message || null,
+    });
+    if (!result?.success) {
+      console.error(`No se pudo enviar alerta WhatsApp a ${contact.name || contact.phone}:`, result?.error || result?.message || "Error desconocido");
+    }
   }
+  return results;
 }
 
 async function notifyRunnerRegistrationApproved(registration, race) {
@@ -3393,8 +3407,17 @@ app.post("/api/registrations/:id/notify-payment", async (req, res) => {
 
     const baseUrl = String(req.body?.baseUrl || process.env.PUBLIC_APP_URL || "").replace(/\/+$/, "");
     const finalBaseUrl = baseUrl || getPublicAppBaseUrl(req);
-    await notifyAdminsRegistrationCreated(registration, race, finalBaseUrl);
-    res.json({ success: true, message: "Alerta reenviada a contactos configurados." });
+    const results = await notifyAdminsRegistrationCreated(registration, race, finalBaseUrl);
+    const sent = (results || []).filter((item) => item.success).length;
+    const failed = (results || []).filter((item) => !item.success).length;
+    const details = failed > 0
+      ? ` Fallidas: ${failed}. Revisa logs o el numero configurado.`
+      : "";
+    res.json({
+      success: failed === 0,
+      message: `Alertas enviadas: ${sent}.${details}`,
+      results,
+    });
   } catch (err) {
     console.error(err);
     res.status(err.statusCode || 500).json({ error: err.message || "Error al reenviar alerta" });
