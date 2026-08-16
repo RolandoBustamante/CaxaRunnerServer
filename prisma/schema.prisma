@@ -22,6 +22,7 @@ model Race {
   registrationPrices Json? @map("registration_prices")
   registrationInstructions String? @map("registration_instructions")
   registrationNotificationPhones Json? @map("registration_notification_phones")
+  whatsappContactPrefix String @default("MM-") @map("whatsapp_contact_prefix")
   registrationPaymentMethods Json? @map("registration_payment_methods")
   registrationRulesPdfPath String? @map("registration_rules_pdf_path")
   registrationRulesPdfOriginalName String? @map("registration_rules_pdf_original_name")

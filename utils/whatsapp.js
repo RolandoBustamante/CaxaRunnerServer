@@ -141,6 +141,34 @@ async function resolveChatIdsFromNumber(client, raw) {
   return chatIds;
 }
 
+function normalizeContactPrefix(value) {
+  const prefix = String(value || "").trim().replace(/\s+/g, " ").slice(0, 24);
+  if (!prefix) return "MM-";
+  return /[-_\s]$/.test(prefix) ? prefix : `${prefix}-`;
+}
+
+function normalizeContactDisplayName(value, prefix = "MM-") {
+  const name = String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .slice(0, 80);
+  if (!name) return null;
+  const normalizedPrefix = normalizeContactPrefix(prefix);
+  return name.toUpperCase().startsWith(normalizedPrefix.toUpperCase()) ? name : `${normalizedPrefix}${name}`;
+}
+
+async function saveContactIfPossible(client, rawNumber, contactName, contactPrefix) {
+  const displayName = normalizeContactDisplayName(contactName, contactPrefix);
+  if (!displayName || !client?.saveOrEditAddressbookContact) return;
+
+  try {
+    const normalized = normalizePhoneNumber(rawNumber);
+    await client.saveOrEditAddressbookContact(normalized, displayName, "");
+  } catch (error) {
+    console.warn("No se pudo guardar contacto WhatsApp:", error?.message || error);
+  }
+}
+
 function configureClient(client) {
   client.removeAllListeners();
 
@@ -364,7 +392,7 @@ async function cancelPairingCode() {
   return { success: true };
 }
 
-async function sendMessage({ number, message, filePath, caption }) {
+async function sendMessage({ number, message, filePath, caption, contactName, contactPrefix }) {
   if (!number) throw new Error("El numero de telefono es obligatorio.");
   if (!message && !filePath) throw new Error("Debe proporcionar un mensaje o archivo.");
   try {
@@ -375,6 +403,7 @@ async function sendMessage({ number, message, filePath, caption }) {
       await waitUntilConnected(attempt === 0 ? 90000 : 30000);
 
       const chatIds = await resolveChatIdsFromNumber(entry.client, number);
+      await saveContactIfPossible(entry.client, number, contactName, contactPrefix);
       for (const chatId of chatIds) {
         try {
           if (filePath) {

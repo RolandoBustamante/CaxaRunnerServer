@@ -195,6 +195,12 @@ function normalizeDistances(value) {
   return distances.length > 0 ? distances : null;
 }
 
+function normalizeWhatsAppContactPrefix(value) {
+  const prefix = String(value || "").trim().replace(/\s+/g, " ").slice(0, 24);
+  if (!prefix) return "MM-";
+  return /[-_\s]$/.test(prefix) ? prefix : `${prefix}-`;
+}
+
 async function ensureDefaultRace() {
   return prisma.race.upsert({
     where: { slug: DEFAULT_RACE_SLUG },
@@ -304,6 +310,7 @@ function serializeRace(race) {
     registrationPrices: race.registrationPrices ?? null,
     registrationInstructions: race.registrationInstructions ?? null,
     registrationNotificationPhones: Array.isArray(race.registrationNotificationPhones) ? race.registrationNotificationPhones : [],
+    whatsappContactPrefix: normalizeWhatsAppContactPrefix(race.whatsappContactPrefix),
     registrationPaymentMethods: race.registrationPaymentMethods ?? null,
     registrationRulesPdfPath: race.registrationRulesPdfPath ?? null,
     registrationRulesPdfOriginalName: race.registrationRulesPdfOriginalName ?? null,
@@ -394,14 +401,20 @@ function parseNotificationPhones(value) {
   const source = Array.isArray(value)
     ? value
     : String(value || "").split(/[\n,;]/);
-  const phones = [
-    ...new Set(
-      source
-        .map((phone) => String(phone || "").replace(/\D/g, ""))
-        .filter((phone) => phone.length >= 9)
-    ),
-  ];
-  return phones.length > 0 ? phones : null;
+  const seen = new Set();
+  const contacts = [];
+
+  source.forEach((item) => {
+    const phone = String(typeof item === "object" && item !== null ? item.phone : item || "").replace(/\D/g, "");
+    if (phone.length < 9 || seen.has(phone)) return;
+    seen.add(phone);
+    const name = typeof item === "object" && item !== null
+      ? String(item.name || "").trim().replace(/\s+/g, " ").slice(0, 80)
+      : "";
+    contacts.push(name ? { name, phone } : { phone });
+  });
+
+  return contacts.length > 0 ? contacts : null;
 }
 
 function normalizePaymentQrPath(value) {
@@ -666,15 +679,21 @@ function buildRunnerConfirmationMessage(registration, race) {
 }
 
 async function notifyAdminsRegistrationCreated(registration, race, baseUrl) {
-  const raceNumbers = Array.isArray(race?.registrationNotificationPhones)
-    ? race.registrationNotificationPhones.map((phone) => String(phone || "").trim()).filter(Boolean)
+  const raceContacts = Array.isArray(race?.registrationNotificationPhones)
+    ? parseNotificationPhones(race.registrationNotificationPhones) || []
     : [];
-  const adminNumbers = raceNumbers.length > 0 ? raceNumbers : getAdminNumbers();
-  if (adminNumbers.length === 0) return;
+  const fallbackContacts = getAdminNumbers().map((phone) => ({ phone }));
+  const adminContacts = raceContacts.length > 0 ? raceContacts : fallbackContacts;
+  if (adminContacts.length === 0) return;
   const message = buildReviewAlertMessage(registration, race, baseUrl);
-  for (const [index, number] of adminNumbers.entries()) {
+  for (const [index, contact] of adminContacts.entries()) {
     if (index > 0) await sleep(MULTI_WHATSAPP_SEND_DELAY_MS);
-    await sendWhatsAppMessage({ number, message }).catch((error) => {
+    await sendWhatsAppMessage({
+      number: contact.phone,
+      message,
+      contactName: contact.name || `Validador ${index + 1}`,
+      contactPrefix: race?.whatsappContactPrefix,
+    }).catch((error) => {
       console.error("No se pudo enviar alerta WhatsApp:", error?.message || error);
       return null;
     });
@@ -686,7 +705,12 @@ async function notifyRunnerRegistrationApproved(registration, race) {
     return { success: false, message: "La inscripcion no tiene telefono de contacto" };
   }
   const message = buildRunnerConfirmationMessage(registration, race);
-  const result = await sendWhatsAppMessage({ number: registration.contactPhone, message });
+  const result = await sendWhatsAppMessage({
+    number: registration.contactPhone,
+    message,
+    contactName: registration.contactName,
+    contactPrefix: race?.whatsappContactPrefix,
+  });
   if (!result.success) {
     console.error("No se pudo enviar confirmacion WhatsApp:", result.error || result.message);
   }
@@ -2811,6 +2835,7 @@ app.post("/api/races", async (req, res) => {
     registrationPrices,
     registrationInstructions,
     registrationNotificationPhones,
+    whatsappContactPrefix,
     registrationPaymentMethods,
   } = req.body;
   if (!name || !String(name).trim()) {
@@ -2839,6 +2864,7 @@ app.post("/api/races", async (req, res) => {
         registrationPrices: parseRegistrationPrices(registrationPrices),
         registrationInstructions: registrationInstructions == null ? null : String(registrationInstructions).trim() || null,
         registrationNotificationPhones: parseNotificationPhones(registrationNotificationPhones),
+        whatsappContactPrefix: normalizeWhatsAppContactPrefix(whatsappContactPrefix),
         registrationPaymentMethods: parseRegistrationPaymentMethods(registrationPaymentMethods),
         categories: categories ?? DEFAULT_CATEGORIES,
         distances: normalizeDistances(distances),
@@ -3031,6 +3057,10 @@ app.put("/api/races/:raceId", async (req, res) => {
 
     if (Object.prototype.hasOwnProperty.call(req.body || {}, "registrationNotificationPhones")) {
       data.registrationNotificationPhones = parseNotificationPhones(req.body.registrationNotificationPhones);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "whatsappContactPrefix")) {
+      data.whatsappContactPrefix = normalizeWhatsAppContactPrefix(req.body.whatsappContactPrefix);
     }
 
     if (Object.prototype.hasOwnProperty.call(req.body || {}, "registrationPaymentMethods")) {
