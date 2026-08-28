@@ -19,7 +19,10 @@ const entry = {
   initializing: null,
   isReady: false,
   manualLogout: false,
+  strikes: 0,
 };
+
+const HEALTH_INTERVAL_MS = 60000;
 
 if (!process.__caxaRunnerWhatsappErrorGuards) {
   process.__caxaRunnerWhatsappErrorGuards = true;
@@ -35,23 +38,20 @@ if (!process.__caxaRunnerWhatsappErrorGuards) {
     );
   };
 
-  process.on("unhandledRejection", (error) => {
+  // ponytail: el server no se cae nunca. En dia de carrera un proceso vivo con
+  // un error logueado siempre gana a un proceso muerto. El costo es que un error
+  // real queda solo en consola: revisa los "FATAL NO MANEJADO" despues del evento.
+  const guard = (origin) => (error) => {
     if (isKnownShutdownError(error)) {
       entry.isReady = false;
       console.warn("WhatsApp ignoro un error transitorio de Chromium:", error?.message || error);
       return;
     }
-    throw error;
-  });
+    console.error(`FATAL NO MANEJADO (${origin}):`, error?.stack || error);
+  };
 
-  process.on("uncaughtException", (error) => {
-    if (isKnownShutdownError(error)) {
-      entry.isReady = false;
-      console.warn("WhatsApp ignoro un error transitorio de Chromium:", error?.message || error);
-      return;
-    }
-    throw error;
-  });
+  process.on("unhandledRejection", guard("unhandledRejection"));
+  process.on("uncaughtException", guard("uncaughtException"));
 }
 
 function normalizePhoneNumber(raw) {
@@ -84,6 +84,13 @@ async function waitUntilConnected(maxMs = 20000) {
     await sleep(750);
   }
   throw new Error("Cliente WhatsApp no conectado.");
+}
+
+function isBrowserAlive(client) {
+  const page = client?.pupPage;
+  const browser = client?.pupBrowser;
+  if (!page || page.isClosed?.()) return false;
+  return browser?.connected !== false;
 }
 
 async function isClientUsable(client) {
@@ -240,7 +247,6 @@ async function destroyClient(logout = false) {
   entry.pairingRequestedAt = null;
   entry.pairingError = null;
   entry.isReady = false;
-  entry.initializing = null;
 }
 
 async function removeSessionFolderSafe(sessionPath, tries = 6) {
@@ -271,9 +277,20 @@ async function initializeClient({ force = false } = {}) {
         clientId: CLIENT_ID,
         dataPath: SESSION_DIR,
       }),
+      takeoverOnConflict: true,
       puppeteer: {
         headless: true,
-        args: ["--no-sandbox", "--disable-setuid-sandbox"],
+        args: [
+          "--no-sandbox",
+          "--disable-setuid-sandbox",
+          "--disable-dev-shm-usage",
+          "--disable-gpu",
+          // sin estos tres Chromium congela los timers del renderer en background
+          // y el socket de WhatsApp Web muere sin emitir "disconnected"
+          "--disable-background-timer-throttling",
+          "--disable-backgrounding-occluded-windows",
+          "--disable-renderer-backgrounding",
+        ],
       },
     });
 
@@ -284,6 +301,15 @@ async function initializeClient({ force = false } = {}) {
 
     try {
       await client.initialize();
+      // wwebjs NO emite "disconnected" si Chromium se cae: hay que escuchar al browser
+      client.pupBrowser?.once("disconnected", () => {
+        if (entry.client !== client || entry.manualLogout) return;
+        entry.isReady = false;
+        entry.client = null;
+        console.error("WhatsApp: Chromium se cerro, reiniciando cliente.");
+        setTimeout(() => initializeClient().catch(() => {}), 2500);
+      });
+      entry.strikes = 0;
       console.log("Cliente WhatsApp inicializado.");
       return client;
     } catch (error) {
@@ -300,6 +326,41 @@ async function initializeClient({ force = false } = {}) {
 
   return entry.initializing;
 }
+
+// ponytail: chequeo cada 60s con 2 strikes. Suficiente para una carrera;
+// si necesitas reconexion en segundos, baja HEALTH_INTERVAL_MS.
+async function healthCheck() {
+  if (!entry.client || entry.initializing || entry.manualLogout) return;
+
+  if (!isBrowserAlive(entry.client)) {
+    console.error("WhatsApp: navegador muerto, reiniciando.");
+    entry.strikes = 0;
+    await initializeClient({ force: true }).catch(() => {});
+    return;
+  }
+
+  const state = await entry.client.getState().catch(() => null);
+  if (state === "CONNECTED") {
+    entry.isReady = await isClientUsable(entry.client);
+    if (entry.isReady) {
+      entry.strikes = 0;
+      return;
+    }
+  }
+
+  entry.isReady = false;
+  // esperando que el usuario escanee: no reiniciar, se perderia el QR
+  if (entry.currentQR || entry.pairingCode) return;
+
+  entry.strikes += 1;
+  console.warn(`WhatsApp: estado ${state} (strike ${entry.strikes}/2).`);
+  if (entry.strikes >= 2) {
+    entry.strikes = 0;
+    await initializeClient({ force: true }).catch(() => {});
+  }
+}
+
+setInterval(() => healthCheck().catch(() => {}), HEALTH_INTERVAL_MS).unref();
 
 function normalizePairingError(error) {
   const message = String(error?.message || error || "");
