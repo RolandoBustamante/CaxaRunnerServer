@@ -86,7 +86,9 @@ model DiscountCode {
   id          Int      @id @default(autoincrement())
   raceId      Int      @map("race_id")
   code        String
+  discountType String   @default("PERCENT") @map("discount_type")
   percent     Decimal  @db.Decimal(5, 2)
+  amountPerParticipant Decimal? @map("amount_per_participant") @db.Decimal(10, 2)
   maxUses     Int?     @map("max_uses")
   validUntil  DateTime? @map("valid_until")
   active      Boolean  @default(true)

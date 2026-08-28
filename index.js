@@ -472,6 +472,26 @@ function roundMoney(value) {
   return Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 }
 
+function normalizeDiscountType(value) {
+  return String(value || "PERCENT").trim().toUpperCase() === "FIXED_PER_PARTICIPANT"
+    ? "FIXED_PER_PARTICIPANT"
+    : "PERCENT";
+}
+
+function calculateDiscountAmount(discountCode, subtotalAmount, participantCount = 1) {
+  if (!discountCode || !Number.isFinite(Number(subtotalAmount)) || Number(subtotalAmount) <= 0) return 0;
+  const type = normalizeDiscountType(discountCode.discountType);
+  if (type === "FIXED_PER_PARTICIPANT") {
+    const amount = Number(discountCode.amountPerParticipant);
+    if (!Number.isFinite(amount) || amount <= 0) return 0;
+    return Math.min(Number(subtotalAmount), roundMoney(amount * normalizeRequestedDiscountUses(participantCount)));
+  }
+  const percent = Number(discountCode.percent);
+  return Number.isFinite(percent) && percent > 0
+    ? roundMoney(Number(subtotalAmount) * (percent / 100))
+    : 0;
+}
+
 function parseValidUntil(value) {
   if (value == null || value === "") return null;
   const text = String(value).trim();
@@ -483,15 +503,22 @@ function parseValidUntil(value) {
 
 async function countDiscountUses(discountCodeId) {
   if (!discountCodeId) return 0;
-  return prisma.registration.count({
+  return prisma.registrationParticipant.count({
     where: {
-      discountCodeId,
-      status: { not: "REJECTED" },
+      registration: {
+        discountCodeId,
+        status: { not: "REJECTED" },
+      },
     },
   });
 }
 
-async function validateDiscountCode(raceId, rawCode) {
+function normalizeRequestedDiscountUses(value) {
+  const uses = Number.parseInt(value, 10);
+  return Number.isFinite(uses) && uses > 0 ? uses : 1;
+}
+
+async function validateDiscountCode(raceId, rawCode, requestedUses = 1) {
   const code = normalizeDiscountCode(rawCode);
   if (!code) return null;
 
@@ -516,7 +543,8 @@ async function validateDiscountCode(raceId, rawCode) {
   }
 
   const usedCount = await countDiscountUses(discountCode.id);
-  if (discountCode.maxUses != null && usedCount >= discountCode.maxUses) {
+  const uses = normalizeRequestedDiscountUses(requestedUses);
+  if (discountCode.maxUses != null && usedCount + uses > discountCode.maxUses) {
     const error = new Error("Codigo de descuento sin cupos disponibles");
     error.statusCode = 400;
     throw error;
@@ -530,7 +558,9 @@ function serializeDiscountCode(discountCode) {
     id: discountCode.id,
     raceId: discountCode.raceId,
     code: discountCode.code,
+    discountType: normalizeDiscountType(discountCode.discountType),
     percent: Number(discountCode.percent),
+    amountPerParticipant: discountCode.amountPerParticipant == null ? null : Number(discountCode.amountPerParticipant),
     maxUses: discountCode.maxUses,
     usedCount: discountCode.usedCount ?? discountCode._count?.registrations ?? 0,
     validUntil: discountCode.validUntil,
@@ -2222,20 +2252,20 @@ app.post("/api/public/:slug/discount-code", async (req, res) => {
       return res.status(403).json({ error: "Los descuentos no estan habilitados para esta carrera" });
     }
 
-    const discountCode = await validateDiscountCode(race.id, req.body?.code);
+    const discountCode = await validateDiscountCode(race.id, req.body?.code, req.body?.participantCount);
     if (!discountCode) {
       return res.status(400).json({ error: "Ingresa un codigo de descuento" });
     }
 
     const subtotalAmount = Number(req.body?.subtotalAmount);
-    const discountPercent = Number(discountCode.percent);
     const discountAmount = Number.isFinite(subtotalAmount) && subtotalAmount > 0
-      ? roundMoney(subtotalAmount * (discountPercent / 100))
+      ? calculateDiscountAmount(discountCode, subtotalAmount, req.body?.participantCount)
       : null;
 
     res.json({
       discountCode: serializeDiscountCode(discountCode),
       discountAmount,
+      requestedUses: normalizeRequestedDiscountUses(req.body?.participantCount),
     });
   } catch (err) {
     console.error(err);
@@ -2412,10 +2442,12 @@ app.post("/api/public/:slug/registration", registrationUpload.any(), async (req,
       return Number.isFinite(price) ? sum + price : sum;
     }, 0);
     const discountCode = requestedDiscountCode
-      ? await validateDiscountCode(race.id, requestedDiscountCode)
+      ? await validateDiscountCode(race.id, requestedDiscountCode, normalizedParticipants.length)
       : null;
-    const discountPercent = discountCode ? Number(discountCode.percent) : 0;
-    const discountAmount = discountCode ? roundMoney(subtotalAmount * (discountPercent / 100)) : 0;
+    const discountPercent = discountCode && normalizeDiscountType(discountCode.discountType) === "PERCENT"
+      ? Number(discountCode.percent)
+      : 0;
+    const discountAmount = discountCode ? calculateDiscountAmount(discountCode, subtotalAmount, normalizedParticipants.length) : 0;
     const totalAmount = Math.max(0, roundMoney(subtotalAmount - discountAmount));
 
     const registration = await prisma.registration.create({
@@ -2430,7 +2462,7 @@ app.post("/api/public/:slug/registration", registrationUpload.any(), async (req,
         totalAmount: subtotalAmount > 0 ? totalAmount : null,
         discountCodeId: discountCode?.id || null,
         discountCodeText: discountCode?.code || null,
-        discountPercent: discountCode ? discountPercent : null,
+        discountPercent: discountCode && normalizeDiscountType(discountCode.discountType) === "PERCENT" ? discountPercent : null,
         discountAmount: discountCode ? discountAmount : null,
         paymentMode,
         rulesAccepted,
@@ -3139,20 +3171,17 @@ app.get("/api/discount-codes", async (req, res) => {
     const race = await resolveRace(req, { allowBody: false });
     const discountCodes = await prisma.discountCode.findMany({
       where: { raceId: race.id },
-      include: {
-        registrations: {
-          where: { status: { not: "REJECTED" } },
-          select: { id: true },
-        },
-      },
       orderBy: [{ active: "desc" }, { createdAt: "desc" }, { id: "desc" }],
     });
+    const discountCodesWithUses = await Promise.all(
+      discountCodes.map(async (discountCode) => ({
+        ...discountCode,
+        usedCount: await countDiscountUses(discountCode.id),
+      }))
+    );
 
     res.json({
-      discountCodes: discountCodes.map((discountCode) => serializeDiscountCode({
-        ...discountCode,
-        usedCount: discountCode.registrations.length,
-      })),
+      discountCodes: discountCodesWithUses.map(serializeDiscountCode),
       raceId: race.id,
     });
   } catch (err) {
@@ -3165,13 +3194,18 @@ app.post("/api/discount-codes", async (req, res) => {
   try {
     const race = await resolveRace(req);
     const code = normalizeDiscountCode(req.body?.code);
-    const percent = Number(req.body?.percent);
+    const discountType = normalizeDiscountType(req.body?.discountType);
+    const percent = discountType === "PERCENT" ? Number(req.body?.percent) : 0;
+    const amountPerParticipant = discountType === "FIXED_PER_PARTICIPANT" ? Number(req.body?.amountPerParticipant) : null;
     const maxUses = req.body?.maxUses == null || req.body.maxUses === "" ? null : Number.parseInt(req.body.maxUses, 10);
     const validUntil = parseValidUntil(req.body?.validUntil);
 
     if (!code) return res.status(400).json({ error: "Codigo requerido" });
-    if (!Number.isFinite(percent) || percent <= 0 || percent > 100) {
+    if (discountType === "PERCENT" && (!Number.isFinite(percent) || percent <= 0 || percent > 100)) {
       return res.status(400).json({ error: "El porcentaje debe estar entre 1 y 100" });
+    }
+    if (discountType === "FIXED_PER_PARTICIPANT" && (!Number.isFinite(amountPerParticipant) || amountPerParticipant <= 0)) {
+      return res.status(400).json({ error: "El monto fijo por corredor debe ser mayor a 0" });
     }
     if (maxUses != null && (!Number.isFinite(maxUses) || maxUses <= 0)) {
       return res.status(400).json({ error: "El limite de usos debe ser mayor a 0" });
@@ -3184,7 +3218,9 @@ app.post("/api/discount-codes", async (req, res) => {
       data: {
         raceId: race.id,
         code,
+        discountType,
         percent,
+        amountPerParticipant,
         maxUses,
         validUntil,
         active: req.body?.active !== false,
@@ -3223,6 +3259,19 @@ app.put("/api/discount-codes/:id", async (req, res) => {
         return res.status(400).json({ error: "El porcentaje debe estar entre 1 y 100" });
       }
       data.percent = percent;
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "discountType")) {
+      data.discountType = normalizeDiscountType(req.body.discountType);
+      if (data.discountType === "PERCENT") data.amountPerParticipant = null;
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "amountPerParticipant")) {
+      const amountPerParticipant = req.body.amountPerParticipant == null || req.body.amountPerParticipant === ""
+        ? null
+        : Number(req.body.amountPerParticipant);
+      if (amountPerParticipant != null && (!Number.isFinite(amountPerParticipant) || amountPerParticipant <= 0)) {
+        return res.status(400).json({ error: "El monto fijo por corredor debe ser mayor a 0" });
+      }
+      data.amountPerParticipant = amountPerParticipant;
     }
     if (Object.prototype.hasOwnProperty.call(req.body || {}, "maxUses")) {
       const maxUses = req.body.maxUses == null || req.body.maxUses === "" ? null : Number.parseInt(req.body.maxUses, 10);
