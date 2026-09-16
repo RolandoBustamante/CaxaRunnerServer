@@ -357,6 +357,11 @@ function buildWelcomeHtmlDocument({
             state.focusX = e.data.focusX;
             state.focusY = e.data.focusY;
             send();
+          } else if (e.data.type === "welcome-nudge") {
+            // Mover la foto: mismo signo que arrastrar (derecha = la foto va a la derecha).
+            state.focusX = clamp(state.focusX - e.data.dx);
+            state.focusY = clamp(state.focusY - e.data.dy);
+            send();
           } else if (e.data.type === "welcome-procedencia") {
             var chip = document.getElementById("chip-procedencia");
             if (chip) chip.style.display = e.data.show ? "" : "none";
