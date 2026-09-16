@@ -9,6 +9,7 @@ const sharp = require("sharp");
 
 const { PrismaClient } = require("./generated/prisma");
 const requireAuth = require("./middleware/auth");
+const { WELCOME_CARD_WIDTH, WELCOME_CARD_HEIGHT, buildWelcomeHtmlDocument } = require("./utils/welcomeCard");
 const authRouter = require("./routes/auth");
 const {
   getAdminNumbers,
@@ -4331,6 +4332,207 @@ app.put("/api/config/categories", async (req, res) => {
   } catch (err) {
     console.error(err);
     res.status(err.statusCode || 500).json({ error: err.message || "Error al guardar categorias" });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Tarjetas de bienvenida
+// ---------------------------------------------------------------------------
+
+const welcomePhotoChecks = new Map();
+
+// Una foto sirve si existe en disco y sharp puede leer su cabecera.
+// Cacheado por nombre de archivo: los uploads son inmutables.
+async function isUsableParticipantPhoto(fileName) {
+  if (!fileName) return false;
+  if (welcomePhotoChecks.has(fileName)) return welcomePhotoChecks.get(fileName);
+
+  const baseDir = path.resolve(PARTICIPANT_PHOTO_UPLOAD_DIR);
+  const filePath = path.resolve(baseDir, fileName);
+  let usable = false;
+  if (filePath.startsWith(`${baseDir}${path.sep}`) && fs.existsSync(filePath)) {
+    try {
+      // Decodificar de verdad: leer solo la cabecera deja pasar archivos truncados.
+      const metadata = await sharp(filePath, { failOn: "truncated" })
+        .resize(64, 64, { fit: "inside" })
+        .toBuffer({ resolveWithObject: true });
+      usable = Boolean(metadata?.info?.width && metadata?.info?.height);
+    } catch {
+      usable = false;
+    }
+  }
+  welcomePhotoChecks.set(fileName, usable);
+  return usable;
+}
+
+function getWelcomeClubLogoDataUri() {
+  return getTrailCajamarcaLogoDataUri();
+}
+
+function getWelcomeRaceLogoDataUri(race) {
+  const uploadedName = String(race?.raceLogoPath || "").split("/").pop();
+  if (uploadedName) {
+    const baseDir = path.resolve(RACE_ASSET_UPLOAD_DIR);
+    const filePath = path.resolve(baseDir, decodeURIComponent(uploadedName));
+    if (filePath.startsWith(`${baseDir}${path.sep}`) && fs.existsSync(filePath)) {
+      return fileToDataUri(filePath);
+    }
+  }
+  const fallback = path.join(__dirname, "assets", "mmc-negativo.png");
+  return fs.existsSync(fallback) ? fileToDataUri(fallback) : null;
+}
+
+// Inscritos aprobados con foto utilizable, ya cruzados con el dorsal asignado.
+async function listWelcomeCandidates(race) {
+  const [rows, participants] = await Promise.all([
+    prisma.registrationParticipant.findMany({
+      where: {
+        photoFileName: { not: null },
+        registration: { raceId: race.id, status: "APPROVED" },
+      },
+      include: { registration: { select: { id: true, code: true } } },
+      orderBy: { nombre: "asc" },
+    }),
+    prisma.participant.findMany({ where: { raceId: race.id } }),
+  ]);
+
+  const dorsalByDocumento = new Map(
+    participants.map((participant) => [normalizeText(participant.documento), participant.dorsal])
+  );
+
+  const candidates = [];
+  let descartadas = 0;
+  for (const row of rows) {
+    if (!(await isUsableParticipantPhoto(row.photoFileName))) {
+      descartadas += 1;
+      continue;
+    }
+    candidates.push({
+      id: row.id,
+      registrationId: row.registrationId,
+      registrationCode: row.registration?.code || null,
+      documento: row.documento,
+      nombre: row.nombre,
+      genero: row.genero,
+      distancia: row.distancia,
+      procedencia: row.procedencia,
+      club: row.club,
+      dorsal: dorsalByDocumento.get(normalizeText(row.documento)) || null,
+    });
+  }
+
+  return { candidates, descartadas };
+}
+
+async function buildWelcomeDocument(race, participantId, options) {
+  const row = await prisma.registrationParticipant.findUnique({
+    where: { id: participantId },
+    include: { registration: true },
+  });
+  if (!row || row.registration.raceId !== race.id) {
+    const error = new Error("Participante no encontrado");
+    error.statusCode = 404;
+    throw error;
+  }
+  if (!(await isUsableParticipantPhoto(row.photoFileName))) {
+    const error = new Error("Este participante no tiene una foto valida");
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const participante = await prisma.participant.findUnique({
+    where: { raceId_documento: { raceId: race.id, documento: row.documento } },
+  });
+
+  return buildWelcomeHtmlDocument({
+    race,
+    participant: {
+      nombre: row.nombre,
+      genero: row.genero,
+      distancia: row.distancia,
+      procedencia: row.procedencia,
+      club: row.club,
+      dorsal: participante?.dorsal || null,
+    },
+    photoDataUri: fileToDataUri(path.join(PARTICIPANT_PHOTO_UPLOAD_DIR, row.photoFileName)),
+    raceLogoDataUri: getWelcomeRaceLogoDataUri(race),
+    clubLogoDataUri: getWelcomeClubLogoDataUri(),
+    eventDateText: formatDateEs(race.eventDate),
+    options,
+  });
+}
+
+async function renderWelcomeImage(html) {
+  let playwright;
+  try {
+    playwright = require("playwright");
+  } catch {
+    const error = new Error("Playwright no esta instalado en el servidor");
+    error.statusCode = 500;
+    throw error;
+  }
+
+  const launchOptions = { headless: true };
+  if (process.env.PDF_BROWSER_PATH) {
+    launchOptions.executablePath = process.env.PDF_BROWSER_PATH;
+  }
+
+  let browser;
+  try {
+    browser = await playwright.chromium.launch(launchOptions);
+    const page = await browser.newPage({
+      viewport: { width: WELCOME_CARD_WIDTH, height: WELCOME_CARD_HEIGHT },
+      deviceScaleFactor: 1,
+    });
+    await page.setContent(html, { waitUntil: "load" });
+    return await page.screenshot({ type: "png" });
+  } finally {
+    if (browser) await browser.close();
+  }
+}
+
+app.get("/api/welcome/participants", async (req, res) => {
+  try {
+    const race = await resolveRace(req, { allowBody: false });
+    const { candidates, descartadas } = await listWelcomeCandidates(race);
+    res.json({ participants: candidates, descartadas, raceId: race.id });
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al listar participantes con foto" });
+  }
+});
+
+app.post("/api/welcome/render", async (req, res) => {
+  const participantId = Number.parseInt(req.body?.participantId, 10);
+  if (Number.isNaN(participantId)) {
+    return res.status(400).json({ error: "participantId requerido" });
+  }
+
+  const wantsImage = String(req.body?.format || "html").toLowerCase() === "png";
+  try {
+    const race = await resolveRace(req);
+    const html = await buildWelcomeDocument(race, participantId, {
+      zoom: req.body?.zoom,
+      focusX: req.body?.focusX,
+      focusY: req.body?.focusY,
+      interactive: !wantsImage,
+    });
+
+    if (!wantsImage) {
+      return res.json({ html, width: WELCOME_CARD_WIDTH, height: WELCOME_CARD_HEIGHT });
+    }
+
+    const imageBuffer = await renderWelcomeImage(html);
+    const slug = normalizeText(req.body?.nombre || "bienvenida")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "") || "bienvenida";
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Content-Disposition", `attachment; filename="bienvenida-${slug}.png"`);
+    res.send(imageBuffer);
+  } catch (err) {
+    console.error(err);
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al generar la tarjeta" });
   }
 });
 
