@@ -58,6 +58,10 @@ function buildWelcomeHtmlDocument({
   const focusX = clamp(options.focusX, 0, 100, 50);
   const focusY = clamp(options.focusY, 0, 100, 42);
   const interactive = Boolean(options.interactive);
+  // multipart manda todo como texto: "false" tiene que contar como false.
+  const showProcedencia = options.showProcedencia == null
+    ? true
+    : !["false", "0", "no", ""].includes(String(options.showProcedencia).toLowerCase());
 
   const nombre = String(participant?.nombre || "").trim();
   const distancia = String(participant?.distancia || "").trim();
@@ -69,7 +73,9 @@ function buildWelcomeHtmlDocument({
   const chips = [
     distancia ? `<span class="chip chip-gold">${escapeHtml(distancia)}</span>` : "",
     dorsal ? `<span class="chip">DORSAL ${escapeHtml(dorsal)}</span>` : "",
-    procedencia ? `<span class="chip">${escapeHtml(procedencia)}</span>` : "",
+    procedencia
+      ? `<span class="chip" id="chip-procedencia"${showProcedencia ? "" : ' style="display:none"'}>${escapeHtml(procedencia)}</span>`
+      : "",
   ].filter(Boolean).join("");
 
   return `<!doctype html>
@@ -342,9 +348,19 @@ function buildWelcomeHtmlDocument({
         });
         photo.addEventListener("pointerup", function () { drag = null; });
         window.addEventListener("message", function (e) {
-          if (!e.data || e.data.type !== "welcome-zoom") return;
-          state.zoom = e.data.zoom;
-          send();
+          if (!e.data) return;
+          if (e.data.type === "welcome-zoom") {
+            state.zoom = e.data.zoom;
+            send();
+          } else if (e.data.type === "welcome-reset") {
+            state.zoom = e.data.zoom;
+            state.focusX = e.data.focusX;
+            state.focusY = e.data.focusY;
+            send();
+          } else if (e.data.type === "welcome-procedencia") {
+            var chip = document.getElementById("chip-procedencia");
+            if (chip) chip.style.display = e.data.show ? "" : "none";
+          }
         });
       })();
     <\/script>` : ""}

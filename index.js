@@ -4339,6 +4339,14 @@ app.put("/api/config/categories", async (req, res) => {
 // Tarjetas de bienvenida
 // ---------------------------------------------------------------------------
 
+const welcomeManualPhotoUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: PARTICIPANT_PHOTO_MAX_UPLOAD_MB * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, cb) => {
+    cb(/^image\//.test(file.mimetype || "") ? null : new Error("Solo se permiten imagenes"), true);
+  },
+});
+
 const welcomePhotoChecks = new Map();
 
 // Una foto sirve si existe en disco y sharp puede leer su cabecera.
@@ -4369,29 +4377,18 @@ function getWelcomeClubLogoDataUri() {
   return getTrailCajamarcaLogoDataUri();
 }
 
-function getWelcomeRaceLogoDataUri(race) {
-  const uploadedName = String(race?.raceLogoPath || "").split("/").pop();
-  if (uploadedName) {
-    const baseDir = path.resolve(RACE_ASSET_UPLOAD_DIR);
-    const filePath = path.resolve(baseDir, decodeURIComponent(uploadedName));
-    if (filePath.startsWith(`${baseDir}${path.sep}`) && fs.existsSync(filePath)) {
-      return fileToDataUri(filePath);
-    }
-  }
-  const fallback = path.join(__dirname, "assets", "mmc-negativo.png");
-  return fs.existsSync(fallback) ? fileToDataUri(fallback) : null;
+function getWelcomeRaceLogoDataUri() {
+  const logoPath = path.join(__dirname, "assets", "mmc-negativo.png");
+  return fs.existsSync(logoPath) ? fileToDataUri(logoPath) : null;
 }
 
-// Inscritos aprobados con foto utilizable, ya cruzados con el dorsal asignado.
+// Inscritos aprobados en orden de inscripcion, marcando quien trae foto utilizable.
 async function listWelcomeCandidates(race) {
   const [rows, participants] = await Promise.all([
     prisma.registrationParticipant.findMany({
-      where: {
-        photoFileName: { not: null },
-        registration: { raceId: race.id, status: "APPROVED" },
-      },
+      where: { registration: { raceId: race.id, status: "APPROVED" } },
       include: { registration: { select: { id: true, code: true } } },
-      orderBy: { nombre: "asc" },
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
     }),
     prisma.participant.findMany({ where: { raceId: race.id } }),
   ]);
@@ -4401,12 +4398,10 @@ async function listWelcomeCandidates(race) {
   );
 
   const candidates = [];
-  let descartadas = 0;
+  let sinFoto = 0;
   for (const row of rows) {
-    if (!(await isUsableParticipantPhoto(row.photoFileName))) {
-      descartadas += 1;
-      continue;
-    }
+    const hasPhoto = await isUsableParticipantPhoto(row.photoFileName);
+    if (!hasPhoto) sinFoto += 1;
     candidates.push({
       id: row.id,
       registrationId: row.registrationId,
@@ -4418,13 +4413,14 @@ async function listWelcomeCandidates(race) {
       procedencia: row.procedencia,
       club: row.club,
       dorsal: dorsalByDocumento.get(normalizeText(row.documento)) || null,
+      hasPhoto,
     });
   }
 
-  return { candidates, descartadas };
+  return { candidates, sinFoto };
 }
 
-async function buildWelcomeDocument(race, participantId, options) {
+async function buildWelcomeDocument(race, participantId, options, manualPhoto) {
   const row = await prisma.registrationParticipant.findUnique({
     where: { id: participantId },
     include: { registration: true },
@@ -4434,8 +4430,14 @@ async function buildWelcomeDocument(race, participantId, options) {
     error.statusCode = 404;
     throw error;
   }
-  if (!(await isUsableParticipantPhoto(row.photoFileName))) {
-    const error = new Error("Este participante no tiene una foto valida");
+
+  let photoDataUri = null;
+  if (manualPhoto?.buffer?.length) {
+    photoDataUri = `data:image/jpeg;base64,${(await normalizeWelcomePhotoBuffer(manualPhoto.buffer)).toString("base64")}`;
+  } else if (await isUsableParticipantPhoto(row.photoFileName)) {
+    photoDataUri = fileToDataUri(path.join(PARTICIPANT_PHOTO_UPLOAD_DIR, row.photoFileName));
+  } else {
+    const error = new Error("Este inscrito no tiene foto valida: subi una manualmente");
     error.statusCode = 400;
     throw error;
   }
@@ -4454,12 +4456,32 @@ async function buildWelcomeDocument(race, participantId, options) {
       club: row.club,
       dorsal: participante?.dorsal || null,
     },
-    photoDataUri: fileToDataUri(path.join(PARTICIPANT_PHOTO_UPLOAD_DIR, row.photoFileName)),
-    raceLogoDataUri: getWelcomeRaceLogoDataUri(race),
+    photoDataUri,
+    raceLogoDataUri: getWelcomeRaceLogoDataUri(),
     clubLogoDataUri: getWelcomeClubLogoDataUri(),
     eventDateText: formatDateEs(race.eventDate),
     options,
   });
+}
+
+// La foto manual no se guarda: se normaliza en memoria y viaja incrustada en el HTML.
+async function normalizeWelcomePhotoBuffer(buffer) {
+  try {
+    return await sharp(buffer, { failOn: "truncated" })
+      .rotate()
+      .resize({
+        width: PARTICIPANT_PHOTO_MAX_DIMENSION,
+        height: PARTICIPANT_PHOTO_MAX_DIMENSION,
+        fit: "inside",
+        withoutEnlargement: true,
+      })
+      .jpeg({ quality: PARTICIPANT_PHOTO_JPEG_QUALITY, mozjpeg: true })
+      .toBuffer();
+  } catch {
+    const error = new Error("La foto subida esta dañada o no es una imagen");
+    error.statusCode = 400;
+    throw error;
+  }
 }
 
 async function renderWelcomeImage(html) {
@@ -4494,15 +4516,16 @@ async function renderWelcomeImage(html) {
 app.get("/api/welcome/participants", async (req, res) => {
   try {
     const race = await resolveRace(req, { allowBody: false });
-    const { candidates, descartadas } = await listWelcomeCandidates(race);
-    res.json({ participants: candidates, descartadas, raceId: race.id });
+    const { candidates, sinFoto } = await listWelcomeCandidates(race);
+    res.json({ participants: candidates, sinFoto, raceId: race.id });
   } catch (err) {
     console.error(err);
-    res.status(err.statusCode || 500).json({ error: err.message || "Error al listar participantes con foto" });
+    res.status(err.statusCode || 500).json({ error: err.message || "Error al listar inscritos" });
   }
 });
 
-app.post("/api/welcome/render", async (req, res) => {
+// Acepta JSON o multipart: si viene "photo" se usa esa imagen en lugar de la del formulario.
+app.post("/api/welcome/render", welcomeManualPhotoUpload.single("photo"), async (req, res) => {
   const participantId = Number.parseInt(req.body?.participantId, 10);
   if (Number.isNaN(participantId)) {
     return res.status(400).json({ error: "participantId requerido" });
@@ -4511,12 +4534,18 @@ app.post("/api/welcome/render", async (req, res) => {
   const wantsImage = String(req.body?.format || "html").toLowerCase() === "png";
   try {
     const race = await resolveRace(req);
-    const html = await buildWelcomeDocument(race, participantId, {
-      zoom: req.body?.zoom,
-      focusX: req.body?.focusX,
-      focusY: req.body?.focusY,
-      interactive: !wantsImage,
-    });
+    const html = await buildWelcomeDocument(
+      race,
+      participantId,
+      {
+        zoom: req.body?.zoom,
+        focusX: req.body?.focusX,
+        focusY: req.body?.focusY,
+        showProcedencia: req.body?.showProcedencia,
+        interactive: !wantsImage,
+      },
+      req.file
+    );
 
     if (!wantsImage) {
       return res.json({ html, width: WELCOME_CARD_WIDTH, height: WELCOME_CARD_HEIGHT });
