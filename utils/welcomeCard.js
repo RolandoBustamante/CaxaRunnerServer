@@ -185,28 +185,18 @@ function buildWelcomeHtmlDocument({
       header {
         position: relative;
         width: 100%;
-        padding: 54px 96px 0;
+        padding: 32px 72px 0;
         display: flex;
         align-items: center;
         justify-content: space-between;
         gap: 32px;
       }
-      header img { max-height: 104px; max-width: 320px; object-fit: contain; }
+      header img { max-height: 140px; max-width: 380px; object-fit: contain; }
       header .rule { flex: 1; height: 2px; background: linear-gradient(90deg, rgba(231, 201, 121, 0), rgba(231, 201, 121, 0.75), rgba(231, 201, 121, 0)); }
 
-      .eyebrow {
-        position: relative;
-        margin-top: 34px;
-        font-size: 25px;
-        font-weight: 700;
-        letter-spacing: 0.42em;
-        text-indent: 0.42em;
-        color: var(--gold);
-        text-transform: uppercase;
-      }
       h1 {
         position: relative;
-        margin-top: 6px;
+        margin-top: 16px;
         font-family: "Segoe UI Black", "Arial Black", "Segoe UI", sans-serif;
         font-size: 104px;
         font-style: italic;
@@ -219,7 +209,7 @@ function buildWelcomeHtmlDocument({
       /* ---------- retrato ---------- */
       .portrait {
         position: relative;
-        margin-top: 26px;
+        margin-top: 16px;
         width: 536px;
         height: 536px;
         border-radius: 50%;
@@ -263,7 +253,7 @@ function buildWelcomeHtmlDocument({
       /* ---------- identidad ---------- */
       .name {
         position: relative;
-        margin-top: 30px;
+        margin-top: 22px;
         padding: 0 90px;
         text-align: center;
         font-family: "Segoe UI Black", "Arial Black", "Segoe UI", sans-serif;
@@ -285,7 +275,7 @@ function buildWelcomeHtmlDocument({
       }
       .chips {
         position: relative;
-        margin-top: 26px;
+        margin-top: 16px;
         display: flex;
         gap: 14px;
         justify-content: center;
@@ -315,37 +305,32 @@ function buildWelcomeHtmlDocument({
         font-weight: 400;
         src: url("${scriptFontDataUri}") format("woff2");
       }` : ""}
+      /* Una sola linea centrada: la frase es larga y no entra en la columna lateral sin pisar el retrato. */
       .slogan {
-        position: absolute;
-        left: 36px;
-        top: 556px;
-        z-index: 6;
-        transform: rotate(-7deg);
-        line-height: 0.79;
-        text-align: left;
+        position: relative;
+        transform: rotate(-2deg);
+        text-align: center;
         filter: drop-shadow(0 4px 7px rgba(5, 29, 48, 0.66));
       }
       .slogan span {
         display: block;
         font-family: "Allura", "Segoe Script", cursive;
-        font-size: 56px;
+        font-size: 46px;
+        line-height: 1.02;
         font-weight: 400;
         letter-spacing: 0.015em;
         white-space: nowrap;
         color: #a8d4ff;
         text-shadow: 0 0 15px rgba(87, 169, 245, 0.45);
       }
-      .slogan span:nth-child(2) { margin-left: 73px; }
-      .slogan span:nth-child(3) { margin-left: 17px; }
       .slogan::after {
         content: "";
         display: block;
-        width: 172px;
+        width: 240px;
         height: 4px;
-        margin: 9px 0 0 23px;
+        margin: 9px auto 0;
         border-radius: 100%;
-        background: linear-gradient(90deg, #ffdc8c, #efd28b 65%, transparent);
-        transform: rotate(-11deg);
+        background: linear-gradient(90deg, transparent, #ffdc8c 35%, #efd28b 70%, transparent);
         box-shadow: 0 0 13px rgba(255, 218, 135, 0.32);
       }
 
@@ -355,7 +340,7 @@ function buildWelcomeHtmlDocument({
         left: 0;
         right: 0;
         bottom: 0;
-        padding: 30px 96px 40px;
+        padding: 22px 60px 36px;
         background: linear-gradient(180deg, rgba(4, 24, 41, 0) 0%, rgba(4, 24, 41, 0.82) 38%, rgba(4, 24, 41, 0.95) 100%);
         display: flex;
         flex-direction: column;
@@ -392,7 +377,6 @@ function buildWelcomeHtmlDocument({
       ${clubLogoDataUri ? `<img src="${clubLogoDataUri}" alt="" />` : "<span></span>"}
     </header>
 
-    <div class="eyebrow">Te damos la bienvenida</div>
     <h1>${escapeHtml(greeting)}</h1>
 
     <div class="portrait">
@@ -405,9 +389,8 @@ function buildWelcomeHtmlDocument({
     <div class="name-underline"></div>
     <div class="chips">${chips}</div>
 
-    <div class="slogan" aria-label="Cajamarca corre diferente"><span>Cajamarca</span><span>Corre</span><span>diferente</span></div>
-
     <footer>
+      <div class="slogan"><span>¡Juntos corremos,</span><span>juntos hacemos historia!</span></div>
       ${raceName ? `<div class="race-name">${escapeHtml(raceName)}</div>` : ""}
       ${eventDateText ? `<div class="race-date">${escapeHtml(eventDateText)}</div>` : ""}
     </footer>
