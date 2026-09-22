@@ -9,7 +9,7 @@ const sharp = require("sharp");
 
 const { PrismaClient } = require("./generated/prisma");
 const requireAuth = require("./middleware/auth");
-const { WELCOME_CARD_WIDTH, WELCOME_CARD_HEIGHT, buildWelcomeHtmlDocument } = require("./utils/welcomeCard");
+const { WELCOME_CARD_WIDTH, WELCOME_CARD_HEIGHT, buildWelcomeHtmlDocument, shortName } = require("./utils/welcomeCard");
 const authRouter = require("./routes/auth");
 const {
   getAdminNumbers,
@@ -4463,7 +4463,7 @@ async function buildWelcomeDocument(race, participantId, options, manualPhoto) {
     throw error;
   }
 
-  return buildWelcomeHtmlDocument({
+  const html = buildWelcomeHtmlDocument({
     race,
     participant: {
       nombre: row.nombre,
@@ -4480,6 +4480,8 @@ async function buildWelcomeDocument(race, participantId, options, manualPhoto) {
     eventDateText: formatDateEs(race.eventDate),
     options,
   });
+
+  return { html, nombre: shortName(row.nombre) };
 }
 
 // La foto manual no se guarda: se normaliza en memoria y viaja incrustada en el HTML.
@@ -4552,7 +4554,7 @@ app.post("/api/welcome/render", welcomeManualPhotoUpload.single("photo"), async 
   const wantsImage = String(req.body?.format || "html").toLowerCase() === "png";
   try {
     const race = await resolveRace(req);
-    const html = await buildWelcomeDocument(
+    const { html, nombre } = await buildWelcomeDocument(
       race,
       participantId,
       {
@@ -4570,12 +4572,15 @@ app.post("/api/welcome/render", welcomeManualPhotoUpload.single("photo"), async 
     }
 
     const imageBuffer = await renderWelcomeImage(html);
-    const slug = normalizeText(req.body?.nombre || "bienvenida")
+    // El archivo se llama igual que lo que se lee en la tarjeta: primer nombre + primer apellido.
+    const slug = normalizeText(nombre)
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, "-")
-      .replace(/^-|-$/g, "") || "bienvenida";
+      .replace(/^-|-$/g, "");
     res.setHeader("Content-Type", "image/png");
-    res.setHeader("Content-Disposition", `attachment; filename="bienvenida-${slug}.png"`);
+    res.setHeader("Content-Disposition", `attachment; filename="bienvenida${slug ? `-${slug}` : ""}.png"`);
     res.send(imageBuffer);
   } catch (err) {
     console.error(err);

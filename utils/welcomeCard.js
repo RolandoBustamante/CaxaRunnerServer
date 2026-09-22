@@ -464,4 +464,5 @@ module.exports = {
   WELCOME_CARD_WIDTH,
   WELCOME_CARD_HEIGHT,
   buildWelcomeHtmlDocument,
+  shortName,
 };
