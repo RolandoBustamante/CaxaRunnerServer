@@ -169,7 +169,9 @@ function normalizeCertificateTemplate(value) {
   return CERTIFICATE_TEMPLATES.has(template) ? template : DEFAULT_CERTIFICATE_TEMPLATE;
 }
 
-app.use(cors());
+// exposedHeaders o el navegador esconde Content-Disposition a fetch() entre origenes
+// distintos, y las descargas caen al nombre generico "archivo".
+app.use(cors({ exposedHeaders: ["Content-Disposition"] }));
 app.use(express.json());
 
 app.use("/api/auth", authRouter);
