@@ -16,13 +16,41 @@ function clamp(value, min, max, fallback) {
   return Math.min(max, Math.max(min, number));
 }
 
-// El nombre manda en la composicion: entre mas largo, mas chico.
+// "de", "del", "la"... van pegados al apellido que siguen, si no "de la Cruz" se parte mal.
+const NAME_PARTICLES = new Set(["de", "del", "la", "las", "los", "da", "di", "dos", "y"]);
+
+function nameTokens(name) {
+  const tokens = [];
+  let pending = "";
+  for (const word of String(name || "").trim().split(/\s+/).filter(Boolean)) {
+    if (NAME_PARTICLES.has(word.toLowerCase())) {
+      pending = pending ? `${pending} ${word}` : word;
+      continue;
+    }
+    tokens.push(pending ? `${pending} ${word}` : word);
+    pending = "";
+  }
+  if (pending) tokens.push(pending);
+  return tokens;
+}
+
+/**
+ * Primer nombre + primer apellido, para que quepa en una sola linea.
+ * Convencion peruana: nombres + apellido paterno + apellido materno.
+ * 3 piezas = 1 nombre + 2 apellidos; 4 o mas = 2 nombres + 2 apellidos.
+ */
+function shortName(name) {
+  const tokens = nameTokens(name);
+  if (tokens.length <= 2) return tokens.join(" ");
+  if (tokens.length === 3) return `${tokens[0]} ${tokens[1]}`;
+  return `${tokens[0]} ${tokens[2]}`;
+}
+
+// Una sola linea: el tamano se calcula para que el texto no se salga de los 900px utiles.
+// Factor 0.70em por caracter, medido sobre Arial Black en mayusculas.
 function nameFontSize(name) {
-  const length = String(name || "").trim().length;
-  if (length <= 14) return 96;
-  if (length <= 20) return 80;
-  if (length <= 28) return 66;
-  return 54;
+  const length = Math.max(1, String(name || "").trim().length);
+  return Math.round(Math.min(96, Math.max(30, 900 / (length * 0.7))));
 }
 
 function greetingFor(genero) {
@@ -49,6 +77,7 @@ function buildWelcomeHtmlDocument({
   race,
   participant,
   photoDataUri,
+  backgroundDataUri,
   raceLogoDataUri,
   clubLogoDataUri,
   eventDateText,
@@ -63,7 +92,7 @@ function buildWelcomeHtmlDocument({
     ? true
     : !["false", "0", "no", ""].includes(String(options.showProcedencia).toLowerCase());
 
-  const nombre = String(participant?.nombre || "").trim();
+  const nombre = shortName(participant?.nombre);
   const distancia = String(participant?.distancia || "").trim();
   const dorsal = String(participant?.dorsal || "").trim();
   const procedencia = String(participant?.procedencia || participant?.club || "").trim();
@@ -116,8 +145,26 @@ function buildWelcomeHtmlDocument({
       .bg {
         background: linear-gradient(158deg, #06253f 0%, #0b3f5f 38%, #106a83 72%, #1594a4 100%);
       }
+      /* Panoramica de Santa Apolonia. Si falta el archivo queda el degradado de abajo. */
+      .photo-bg {
+        position: absolute;
+        inset: 0;
+        background-image: ${backgroundDataUri ? `url("${backgroundDataUri}")` : "none"};
+        background-size: cover;
+        background-position: 40% 50%;
+        filter: saturate(0.88) contrast(1.05);
+      }
+      /* Oscurecer arriba y abajo: sin esto el nombre y la fecha no se leen sobre la ciudad. */
+      .photo-bg::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(180deg, rgba(5, 24, 44, 0.88) 0%, rgba(6, 34, 54, 0.8) 18%, rgba(4, 30, 47, 0.42) 34%, rgba(3, 30, 48, 0.5) 62%, rgba(5, 28, 43, 0.93) 82%, #061c30 100%),
+          linear-gradient(90deg, rgba(3, 28, 49, 0.35), transparent 48%, rgba(4, 30, 48, 0.24));
+      }
       .glow {
-        background: radial-gradient(52% 34% at 50% 40%, rgba(64, 232, 226, 0.42) 0%, rgba(64, 232, 226, 0.12) 45%, rgba(6, 37, 63, 0) 72%);
+        background: radial-gradient(52% 34% at 50% 40%, rgba(64, 232, 226, ${backgroundDataUri ? "0.16" : "0.42"}) 0%, rgba(64, 232, 226, 0.08) 45%, rgba(6, 37, 63, 0) 72%);
       }
       .streaks {
         background: repeating-linear-gradient(112deg, rgba(255, 255, 255, 0.055) 0 3px, rgba(255, 255, 255, 0) 3px 46px);
@@ -227,6 +274,7 @@ function buildWelcomeHtmlDocument({
         font-weight: 900;
         font-size: ${nameFontSize(nombre)}px;
         line-height: 1.02;
+        white-space: nowrap;
         letter-spacing: -0.025em;
         text-transform: uppercase;
         text-shadow: 0 8px 22px rgba(3, 20, 34, 0.5);
@@ -295,6 +343,7 @@ function buildWelcomeHtmlDocument({
   </head>
   <body>
     <div class="bg"></div>
+    <div class="photo-bg"></div>
     <div class="glow"></div>
     <div class="streaks"></div>
     <div class="greca greca-l"></div>

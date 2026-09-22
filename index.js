@@ -4382,6 +4382,16 @@ function getWelcomeRaceLogoDataUri() {
   return fs.existsSync(logoPath) ? fileToDataUri(logoPath) : null;
 }
 
+// ponytail: el fondo es el mismo para todos, se lee una vez y se cachea en memoria.
+let welcomeBackgroundDataUri;
+function getWelcomeBackgroundDataUri() {
+  if (welcomeBackgroundDataUri === undefined) {
+    const bgPath = path.join(__dirname, "assets", "santa-apolonia.jpg");
+    welcomeBackgroundDataUri = fs.existsSync(bgPath) ? fileToDataUri(bgPath) : null;
+  }
+  return welcomeBackgroundDataUri;
+}
+
 // Inscritos aprobados en orden de inscripcion, marcando quien trae foto utilizable.
 async function listWelcomeCandidates(race) {
   const [rows, participants] = await Promise.all([
@@ -4457,6 +4467,7 @@ async function buildWelcomeDocument(race, participantId, options, manualPhoto) {
       dorsal: participante?.dorsal || null,
     },
     photoDataUri,
+    backgroundDataUri: getWelcomeBackgroundDataUri(),
     raceLogoDataUri: getWelcomeRaceLogoDataUri(),
     clubLogoDataUri: getWelcomeClubLogoDataUri(),
     eventDateText: formatDateEs(race.eventDate),
