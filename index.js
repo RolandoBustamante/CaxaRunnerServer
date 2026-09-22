@@ -4382,7 +4382,7 @@ function getWelcomeRaceLogoDataUri() {
   return fs.existsSync(logoPath) ? fileToDataUri(logoPath) : null;
 }
 
-// ponytail: el fondo es el mismo para todos, se lee una vez y se cachea en memoria.
+// ponytail: fondo y fuente son iguales para todos, se leen una vez y se cachean en memoria.
 let welcomeBackgroundDataUri;
 function getWelcomeBackgroundDataUri() {
   if (welcomeBackgroundDataUri === undefined) {
@@ -4390,6 +4390,17 @@ function getWelcomeBackgroundDataUri() {
     welcomeBackgroundDataUri = fs.existsSync(bgPath) ? fileToDataUri(bgPath) : null;
   }
   return welcomeBackgroundDataUri;
+}
+
+let welcomeScriptFontDataUri;
+function getWelcomeScriptFontDataUri() {
+  if (welcomeScriptFontDataUri === undefined) {
+    const fontPath = path.join(__dirname, "assets", "allura-latin.woff2");
+    welcomeScriptFontDataUri = fs.existsSync(fontPath)
+      ? `data:font/woff2;base64,${fs.readFileSync(fontPath).toString("base64")}`
+      : null;
+  }
+  return welcomeScriptFontDataUri;
 }
 
 // Inscritos aprobados en orden de inscripcion, marcando quien trae foto utilizable.
@@ -4452,10 +4463,6 @@ async function buildWelcomeDocument(race, participantId, options, manualPhoto) {
     throw error;
   }
 
-  const participante = await prisma.participant.findUnique({
-    where: { raceId_documento: { raceId: race.id, documento: row.documento } },
-  });
-
   return buildWelcomeHtmlDocument({
     race,
     participant: {
@@ -4464,10 +4471,10 @@ async function buildWelcomeDocument(race, participantId, options, manualPhoto) {
       distancia: row.distancia,
       procedencia: row.procedencia,
       club: row.club,
-      dorsal: participante?.dorsal || null,
     },
     photoDataUri,
     backgroundDataUri: getWelcomeBackgroundDataUri(),
+    scriptFontDataUri: getWelcomeScriptFontDataUri(),
     raceLogoDataUri: getWelcomeRaceLogoDataUri(),
     clubLogoDataUri: getWelcomeClubLogoDataUri(),
     eventDateText: formatDateEs(race.eventDate),

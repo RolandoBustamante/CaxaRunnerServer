@@ -60,7 +60,7 @@ function greetingFor(genero) {
 }
 
 // Greca escalonada andina, en SVG porque un patron CSS no sobrevive al render.
-function grecaDataUri(color = "%23f6e6b8") {
+function grecaDataUri(color = "%23ffe3ac") {
   return (
     "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='72' height='72'%3E" +
     "%3Cpath d='M0 72h18V54h18V36h18V18h18V0' fill='none' stroke='" + color + "' stroke-width='9'/%3E" +
@@ -78,6 +78,7 @@ function buildWelcomeHtmlDocument({
   participant,
   photoDataUri,
   backgroundDataUri,
+  scriptFontDataUri,
   raceLogoDataUri,
   clubLogoDataUri,
   eventDateText,
@@ -94,14 +95,12 @@ function buildWelcomeHtmlDocument({
 
   const nombre = shortName(participant?.nombre);
   const distancia = String(participant?.distancia || "").trim();
-  const dorsal = String(participant?.dorsal || "").trim();
   const procedencia = String(participant?.procedencia || participant?.club || "").trim();
   const greeting = greetingFor(participant?.genero);
   const raceName = String(race?.name || "").trim();
 
   const chips = [
     distancia ? `<span class="chip chip-gold">${escapeHtml(distancia)}</span>` : "",
-    dorsal ? `<span class="chip">DORSAL ${escapeHtml(dorsal)}</span>` : "",
     procedencia
       ? `<span class="chip" id="chip-procedencia"${showProcedencia ? "" : ' style="display:none"'}>${escapeHtml(procedencia)}</span>`
       : "",
@@ -116,10 +115,11 @@ function buildWelcomeHtmlDocument({
       :root {
         --navy: #06253f;
         --navy-mid: #0d4a6b;
-        --teal: #17a2b8;
-        --teal-bright: #2fd6d6;
-        --gold: #e7c979;
-        --gold-soft: #f6e6b8;
+        /* Muestreados de la panoramica: el neon de la cruz y el alumbrado de la ciudad. */
+        --neon: #57a9f5;
+        --neon-deep: #1d5c9e;
+        --gold: #f0be72;
+        --gold-soft: #ffe3ac;
       }
       * { box-sizing: border-box; margin: 0; padding: 0; }
       html, body {
@@ -140,7 +140,6 @@ function buildWelcomeHtmlDocument({
       /* ---------- fondo ---------- */
       .bg,
       .glow,
-      .streaks,
       .vignette { position: absolute; inset: 0; }
       .bg {
         background: linear-gradient(158deg, #06253f 0%, #0b3f5f 38%, #106a83 72%, #1594a4 100%);
@@ -164,10 +163,7 @@ function buildWelcomeHtmlDocument({
           linear-gradient(90deg, rgba(3, 28, 49, 0.35), transparent 48%, rgba(4, 30, 48, 0.24));
       }
       .glow {
-        background: radial-gradient(52% 34% at 50% 40%, rgba(64, 232, 226, ${backgroundDataUri ? "0.16" : "0.42"}) 0%, rgba(64, 232, 226, 0.08) 45%, rgba(6, 37, 63, 0) 72%);
-      }
-      .streaks {
-        background: repeating-linear-gradient(112deg, rgba(255, 255, 255, 0.055) 0 3px, rgba(255, 255, 255, 0) 3px 46px);
+        background: radial-gradient(52% 34% at 50% 40%, rgba(87, 169, 245, ${backgroundDataUri ? "0.18" : "0.42"}) 0%, rgba(87, 169, 245, 0.09) 45%, rgba(6, 37, 63, 0) 72%);
       }
       .vignette {
         background: radial-gradient(120% 78% at 50% 44%, rgba(6, 37, 63, 0) 55%, rgba(4, 24, 41, 0.72) 100%);
@@ -229,7 +225,7 @@ function buildWelcomeHtmlDocument({
         border-radius: 50%;
         display: grid;
         place-items: center;
-        background: conic-gradient(from 212deg, var(--teal-bright) 0%, #0e7490 22%, var(--gold-soft) 46%, var(--gold) 58%, #0e7490 80%, var(--teal-bright) 100%);
+        background: conic-gradient(from 212deg, var(--neon) 0%, var(--neon-deep) 21%, var(--gold-soft) 46%, var(--gold) 59%, var(--neon-deep) 79%, var(--neon) 100%);
       }
       .portrait::before {
         content: "";
@@ -243,7 +239,7 @@ function buildWelcomeHtmlDocument({
         height: 452px;
         border-radius: 50%;
         padding: 9px;
-        background: linear-gradient(140deg, var(--gold-soft), var(--gold) 45%, #c9a44f 100%);
+        background: linear-gradient(140deg, var(--gold-soft), var(--gold) 45%, #b8862f 100%);
       }
       .portrait-inner > div {
         width: 100%;
@@ -285,7 +281,7 @@ function buildWelcomeHtmlDocument({
         width: 190px;
         height: 5px;
         border-radius: 999px;
-        background: linear-gradient(90deg, rgba(231, 201, 121, 0), var(--gold), rgba(231, 201, 121, 0));
+        background: linear-gradient(90deg, rgba(240, 190, 114, 0), var(--gold), rgba(240, 190, 114, 0));
       }
       .chips {
         position: relative;
@@ -310,6 +306,47 @@ function buildWelcomeHtmlDocument({
         border-color: var(--gold);
         color: #06253f;
         font-weight: 900;
+      }
+
+      /* Allura va incrustada: Playwright renderiza sin red y una cursiva del sistema arruina el sello. */
+      ${scriptFontDataUri ? `@font-face {
+        font-family: "Allura";
+        font-style: normal;
+        font-weight: 400;
+        src: url("${scriptFontDataUri}") format("woff2");
+      }` : ""}
+      .slogan {
+        position: absolute;
+        left: 36px;
+        top: 556px;
+        z-index: 6;
+        transform: rotate(-7deg);
+        line-height: 0.79;
+        text-align: left;
+        filter: drop-shadow(0 4px 7px rgba(5, 29, 48, 0.66));
+      }
+      .slogan span {
+        display: block;
+        font-family: "Allura", "Segoe Script", cursive;
+        font-size: 56px;
+        font-weight: 400;
+        letter-spacing: 0.015em;
+        white-space: nowrap;
+        color: #a8d4ff;
+        text-shadow: 0 0 15px rgba(87, 169, 245, 0.45);
+      }
+      .slogan span:nth-child(2) { margin-left: 73px; }
+      .slogan span:nth-child(3) { margin-left: 17px; }
+      .slogan::after {
+        content: "";
+        display: block;
+        width: 172px;
+        height: 4px;
+        margin: 9px 0 0 23px;
+        border-radius: 100%;
+        background: linear-gradient(90deg, #ffdc8c, #efd28b 65%, transparent);
+        transform: rotate(-11deg);
+        box-shadow: 0 0 13px rgba(255, 218, 135, 0.32);
       }
 
       /* ---------- banda inferior ---------- */
@@ -345,7 +382,6 @@ function buildWelcomeHtmlDocument({
     <div class="bg"></div>
     <div class="photo-bg"></div>
     <div class="glow"></div>
-    <div class="streaks"></div>
     <div class="greca greca-l"></div>
     <div class="greca greca-r"></div>
     <div class="vignette"></div>
@@ -368,6 +404,8 @@ function buildWelcomeHtmlDocument({
     <div class="name">${escapeHtml(nombre)}</div>
     <div class="name-underline"></div>
     <div class="chips">${chips}</div>
+
+    <div class="slogan" aria-label="Cajamarca corre diferente"><span>Cajamarca</span><span>Corre</span><span>diferente</span></div>
 
     <footer>
       ${raceName ? `<div class="race-name">${escapeHtml(raceName)}</div>` : ""}
