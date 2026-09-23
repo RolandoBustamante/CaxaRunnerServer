@@ -1,6 +1,10 @@
 const WELCOME_CARD_WIDTH = 1080;
 const WELCOME_CARD_HEIGHT = 1350;
 
+// Separacion del pie respecto al eslogan; la segunda compensa media fila de chips.
+const FOOTER_GAP = 22;
+const FOOTER_GAP_NO_CHIP = 53;
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replace(/&/g, "&amp;")
@@ -98,6 +102,11 @@ function buildWelcomeHtmlDocument({
   const procedencia = String(participant?.procedencia || participant?.club || "").trim();
   const greeting = greetingFor(participant?.genero);
   const raceName = String(race?.name || "").trim();
+
+  // Sin el chip de procedencia el pie subiria los 61px que ocupa la fila; con el margen
+  // extra sube solo la mitad, para no dejar un vacio grande abajo.
+  const chipVisible = Boolean(procedencia) && showProcedencia;
+  const footerGap = chipVisible ? FOOTER_GAP : FOOTER_GAP_NO_CHIP;
 
   const chips = [
     procedencia
@@ -362,7 +371,7 @@ function buildWelcomeHtmlDocument({
       footer {
         position: relative;
         width: 100%;
-        margin-top: 22px;
+        margin-top: ${footerGap}px;
         padding: 0 60px;
         display: flex;
         flex-direction: column;
@@ -459,6 +468,8 @@ function buildWelcomeHtmlDocument({
           } else if (e.data.type === "welcome-procedencia") {
             var chip = document.getElementById("chip-procedencia");
             if (chip) chip.style.display = e.data.show ? "" : "none";
+            document.querySelector("footer").style.marginTop =
+              (e.data.show && chip ? ${FOOTER_GAP} : ${FOOTER_GAP_NO_CHIP}) + "px";
           }
         });
       })();
