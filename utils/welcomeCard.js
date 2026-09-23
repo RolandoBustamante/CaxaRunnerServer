@@ -353,7 +353,7 @@ function buildWelcomeHtmlDocument({
         left: 0;
         right: 0;
         bottom: 0;
-        padding: 16px 60px 30px;
+        padding: 16px 60px 46px;
         background: linear-gradient(180deg, rgba(4, 24, 41, 0) 0%, rgba(4, 24, 41, 0.82) 38%, rgba(4, 24, 41, 0.95) 100%);
         display: flex;
         flex-direction: column;
