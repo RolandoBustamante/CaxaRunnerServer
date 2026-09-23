@@ -320,8 +320,8 @@ function buildWelcomeHtmlDocument({
         font-weight: 400;
         letter-spacing: 0.015em;
         white-space: nowrap;
-        color: #a8d4ff;
-        text-shadow: 0 0 15px rgba(87, 169, 245, 0.45);
+        color: #ffffff;
+        text-shadow: 0 0 15px rgba(255, 255, 255, 0.3);
       }
       .slogan::after {
         content: "";
