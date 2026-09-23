@@ -320,7 +320,7 @@ function buildWelcomeHtmlDocument({
       /* Una sola linea centrada: la frase es larga y no entra en la columna lateral sin pisar el retrato. */
       .slogan {
         position: relative;
-        margin-bottom: 30px;
+        margin-top: 18px;
         transform: rotate(-2deg);
         text-align: center;
         filter: drop-shadow(0 4px 7px rgba(5, 29, 48, 0.66));
@@ -328,7 +328,7 @@ function buildWelcomeHtmlDocument({
       .slogan span {
         display: block;
         font-family: "Allura", "Segoe Script", cursive;
-        font-size: 46px;
+        font-size: 44px;
         line-height: 1.02;
         font-weight: 400;
         letter-spacing: 0.015em;
@@ -353,7 +353,7 @@ function buildWelcomeHtmlDocument({
         left: 0;
         right: 0;
         bottom: 0;
-        padding: 22px 60px 36px;
+        padding: 16px 60px 30px;
         background: linear-gradient(180deg, rgba(4, 24, 41, 0) 0%, rgba(4, 24, 41, 0.82) 38%, rgba(4, 24, 41, 0.95) 100%);
         display: flex;
         flex-direction: column;
@@ -402,9 +402,9 @@ function buildWelcomeHtmlDocument({
     <div class="name">${escapeHtml(nombre)}</div>
     <div class="name-underline"></div>
     <div class="chips">${chips}</div>
+    <div class="slogan"><span>¡Juntos corremos,</span><span>juntos hacemos historia!</span></div>
 
     <footer>
-      <div class="slogan"><span>¡Juntos corremos,</span><span>juntos hacemos historia!</span></div>
       ${raceName ? `<div class="race-name">${escapeHtml(raceName)}</div>` : ""}
       ${eventDateText ? `<div class="race-date">${escapeHtml(eventDateText)}</div>` : ""}
     </footer>
