@@ -100,7 +100,6 @@ function buildWelcomeHtmlDocument({
   const raceName = String(race?.name || "").trim();
 
   const chips = [
-    distancia ? `<span class="chip chip-gold">${escapeHtml(distancia)}</span>` : "",
     procedencia
       ? `<span class="chip" id="chip-procedencia"${showProcedencia ? "" : ' style="display:none"'}>${escapeHtml(procedencia)}</span>`
       : "",
@@ -253,7 +252,7 @@ function buildWelcomeHtmlDocument({
       /* ---------- identidad ---------- */
       .name {
         position: relative;
-        margin-top: 22px;
+        margin-top: 16px;
         padding: 0 90px;
         text-align: center;
         font-family: "Segoe UI Black", "Arial Black", "Segoe UI", sans-serif;
@@ -275,7 +274,7 @@ function buildWelcomeHtmlDocument({
       }
       .chips {
         position: relative;
-        margin-top: 16px;
+        margin-top: 10px;
         display: flex;
         gap: 14px;
         justify-content: center;
@@ -291,11 +290,24 @@ function buildWelcomeHtmlDocument({
         letter-spacing: 0.06em;
         text-transform: uppercase;
       }
-      .chip-gold {
+      /* La distancia va montada en el aro del retrato: suelta abajo se perdia entre el nombre y la procedencia. */
+      .dist {
+        position: absolute;
+        left: 50%;
+        bottom: -4px;
+        transform: translateX(-50%);
+        z-index: 4;
+        padding: 12px 42px;
+        border-radius: 999px;
+        border: 5px solid #ffffff;
         background: var(--gold);
-        border-color: var(--gold);
         color: #06253f;
+        font-size: 46px;
         font-weight: 900;
+        line-height: 1;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        box-shadow: 0 10px 26px rgba(3, 20, 34, 0.5);
       }
 
       /* Allura va incrustada: Playwright renderiza sin red y una cursiva del sistema arruina el sello. */
@@ -308,6 +320,7 @@ function buildWelcomeHtmlDocument({
       /* Una sola linea centrada: la frase es larga y no entra en la columna lateral sin pisar el retrato. */
       .slogan {
         position: relative;
+        margin-bottom: 30px;
         transform: rotate(-2deg);
         text-align: center;
         filter: drop-shadow(0 4px 7px rgba(5, 29, 48, 0.66));
@@ -383,6 +396,7 @@ function buildWelcomeHtmlDocument({
       <div class="portrait-inner">
         <div><div class="photo" id="photo"></div></div>
       </div>
+      ${distancia ? `<div class="dist">${escapeHtml(distancia)}</div>` : ""}
     </div>
 
     <div class="name">${escapeHtml(nombre)}</div>
