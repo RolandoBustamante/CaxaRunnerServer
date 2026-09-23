@@ -348,13 +348,22 @@ function buildWelcomeHtmlDocument({
       }
 
       /* ---------- banda inferior ---------- */
-      footer {
+      /* El degradado va aparte y anclado abajo: asi el pie puede seguir al contenido
+         (sube cuando se oculta la procedencia) sin que la banda oscura deje de llegar
+         al borde de la tarjeta. */
+      .footer-bg {
         position: absolute;
         left: 0;
         right: 0;
         bottom: 0;
-        padding: 16px 60px 46px;
-        background: linear-gradient(180deg, rgba(4, 24, 41, 0) 0%, rgba(4, 24, 41, 0.82) 38%, rgba(4, 24, 41, 0.95) 100%);
+        height: 210px;
+        background: linear-gradient(180deg, rgba(4, 24, 41, 0) 0%, rgba(4, 24, 41, 0.82) 45%, rgba(4, 24, 41, 0.95) 100%);
+      }
+      footer {
+        position: relative;
+        width: 100%;
+        margin-top: 22px;
+        padding: 0 60px;
         display: flex;
         flex-direction: column;
         align-items: center;
@@ -404,6 +413,7 @@ function buildWelcomeHtmlDocument({
     <div class="chips">${chips}</div>
     <div class="slogan"><span>¡Juntos corremos,</span><span>juntos hacemos historia!</span></div>
 
+    <div class="footer-bg"></div>
     <footer>
       ${raceName ? `<div class="race-name">${escapeHtml(raceName)}</div>` : ""}
       ${eventDateText ? `<div class="race-date">${escapeHtml(eventDateText)}</div>` : ""}
