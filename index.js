@@ -309,6 +309,8 @@ function serializeRace(race) {
     showDorsalPublic: race.showDorsalPublic,
     certificateTemplate: normalizeCertificateTemplate(race.certificateTemplate),
     registrationsEnabled: race.registrationsEnabled,
+    registrationDeadline: race.registrationDeadline ?? null,
+    registrationsClosed: isExpired(race.registrationDeadline),
     discountsEnabled: race.discountsEnabled,
     registrationPrices: race.registrationPrices ?? null,
     registrationInstructions: race.registrationInstructions ?? null,
@@ -504,6 +506,17 @@ function parseValidUntil(value) {
   return Number.isNaN(date.getTime()) ? null : date;
 }
 
+// ponytail: Peru es UTC-5 fijo (sin horario de verano); comparamos por dia calendario
+// para que "valido hasta el 30" siga valido todo el 30 en hora local.
+function limaDateString(date = new Date()) {
+  return new Date(date.getTime() - 5 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
+function isExpired(deadline) {
+  if (!deadline) return false;
+  return limaDateString(new Date(deadline)) < limaDateString();
+}
+
 async function countDiscountUses(discountCodeId) {
   if (!discountCodeId) return 0;
   return prisma.registrationParticipant.count({
@@ -539,7 +552,7 @@ async function validateDiscountCode(raceId, rawCode, requestedUses = 1) {
     throw error;
   }
 
-  if (discountCode.validUntil && discountCode.validUntil.getTime() < Date.now()) {
+  if (isExpired(discountCode.validUntil)) {
     const error = new Error("Codigo de descuento vencido");
     error.statusCode = 400;
     throw error;
@@ -2227,6 +2240,8 @@ app.get("/api/public/:slug/registration", async (req, res) => {
         name: race.name,
         eventDate: race.eventDate,
         registrationsEnabled: race.registrationsEnabled,
+        registrationDeadline: race.registrationDeadline ?? null,
+        registrationsClosed: isExpired(race.registrationDeadline),
         discountsEnabled: race.discountsEnabled,
         registrationPrices: race.registrationPrices ?? null,
         registrationInstructions: race.registrationInstructions ?? null,
@@ -2289,6 +2304,10 @@ app.post("/api/public/:slug/registration", registrationUpload.any(), async (req,
     if (!race.registrationsEnabled) {
       unlinkUploadedFiles(uploadedFiles);
       return res.status(403).json({ error: "Las inscripciones no están habilitadas para esta carrera" });
+    }
+    if (isExpired(race.registrationDeadline)) {
+      unlinkUploadedFiles(uploadedFiles);
+      return res.status(403).json({ error: "El plazo de inscripción ya cerró" });
     }
 
     const payload = JSON.parse(String(req.body?.payload || "{}"));
@@ -3088,6 +3107,14 @@ app.put("/api/races/:raceId", async (req, res) => {
 
     if (Object.prototype.hasOwnProperty.call(req.body || {}, "registrationsEnabled")) {
       data.registrationsEnabled = Boolean(req.body.registrationsEnabled);
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, "registrationDeadline")) {
+      const registrationDeadline = parseValidUntil(req.body.registrationDeadline);
+      if (req.body.registrationDeadline && !registrationDeadline) {
+        return res.status(400).json({ error: "Fecha de cierre de inscripciones invalida" });
+      }
+      data.registrationDeadline = registrationDeadline;
     }
 
     if (Object.prototype.hasOwnProperty.call(req.body || {}, "discountsEnabled")) {

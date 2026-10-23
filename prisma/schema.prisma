@@ -18,6 +18,7 @@ model Race {
   showDorsalPublic Boolean @default(true) @map("show_dorsal_public")
   certificateTemplate String @default("classic") @map("certificate_template")
   registrationsEnabled Boolean @default(false) @map("registrations_enabled")
+  registrationDeadline DateTime? @map("registration_deadline")
   discountsEnabled Boolean @default(false) @map("discounts_enabled")
   registrationPrices Json? @map("registration_prices")
   registrationInstructions String? @map("registration_instructions")
