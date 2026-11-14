@@ -3698,7 +3698,7 @@ app.post("/api/participants", async (req, res) => {
             raceId: race.id,
             documento: participant.documento,
             nombre: participant.nombre,
-            edad: calculateAge(participant.birthDate, race.eventDate || new Date()),
+            edad: participant.edad,
             genero: participant.genero,
             distancia: participant.distancia,
             dorsal: participant.dorsal,
