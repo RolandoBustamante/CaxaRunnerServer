@@ -1864,8 +1864,23 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
   return standings.get(normalizeDorsal(dorsal)) || null;
 }
 
+// ponytail: la prenda vive en la inscripcion; se une por documento en vez de duplicar columnas
+async function withGarments(raceId, participants) {
+  if (participants.length === 0) return participants;
+  const garments = await prisma.registrationParticipant.findMany({
+    // sin filtro por documento: el `in` de prisma es case-sensitive y hay DNIs con letras
+    where: { registration: { raceId, status: "APPROVED" } },
+    select: { documento: true, garmentType: true, garmentSize: true },
+  });
+  const byDoc = new Map(garments.map((g) => [normalizeDocument(g.documento), g]));
+  return participants.map((p) => {
+    const g = byDoc.get(normalizeDocument(p.documento));
+    return { ...p, garmentType: g?.garmentType || null, garmentSize: g?.garmentSize || null };
+  });
+}
+
 async function getRacePayload(race) {
-  const [participants, finishers, categories, garments] = await Promise.all([
+  const [participants, finishers, categories] = await Promise.all([
     prisma.participant.findMany({
       where: { raceId: race.id },
       orderBy: { nombre: "asc" },
@@ -1875,24 +1890,12 @@ async function getRacePayload(race) {
       orderBy: { position: "asc" },
     }),
     getRaceCategories(race),
-    // ponytail: la prenda vive en la inscripcion; se une por documento en vez de duplicar columnas
-    prisma.registrationParticipant.findMany({
-      where: { registration: { raceId: race.id, status: "APPROVED" } },
-      select: { documento: true, garmentType: true, garmentSize: true },
-    }),
   ]);
-
-  const garmentByDoc = new Map(
-    garments.map((g) => [normalizeDocument(g.documento), g])
-  );
 
   return {
     serverNow: Date.now(),
     ...serializeRace(race),
-    participants: participants.map((p) => {
-      const g = garmentByDoc.get(normalizeDocument(p.documento));
-      return { ...p, garmentType: g?.garmentType || null, garmentSize: g?.garmentSize || null };
-    }),
+    participants: await withGarments(race.id, participants),
     finishers: finishers.map(serializeFinisher),
     categories,
   };
@@ -3833,7 +3836,7 @@ app.get("/api/participants/search", async (req, res) => {
       orderBy: { nombre: "asc" },
       take: 20,
     });
-    res.json(results);
+    res.json(await withGarments(race.id, results));
   } catch (err) {
     console.error(err);
     res.status(err.statusCode || 500).json({ error: err.message || "Error al buscar participante" });
