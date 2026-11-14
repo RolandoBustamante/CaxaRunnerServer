@@ -1865,7 +1865,7 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
 }
 
 async function getRacePayload(race) {
-  const [participants, finishers, categories] = await Promise.all([
+  const [participants, finishers, categories, garments] = await Promise.all([
     prisma.participant.findMany({
       where: { raceId: race.id },
       orderBy: { nombre: "asc" },
@@ -1875,12 +1875,24 @@ async function getRacePayload(race) {
       orderBy: { position: "asc" },
     }),
     getRaceCategories(race),
+    // ponytail: la prenda vive en la inscripcion; se une por documento en vez de duplicar columnas
+    prisma.registrationParticipant.findMany({
+      where: { registration: { raceId: race.id, status: "APPROVED" } },
+      select: { documento: true, garmentType: true, garmentSize: true },
+    }),
   ]);
+
+  const garmentByDoc = new Map(
+    garments.map((g) => [normalizeDocument(g.documento), g])
+  );
 
   return {
     serverNow: Date.now(),
     ...serializeRace(race),
-    participants,
+    participants: participants.map((p) => {
+      const g = garmentByDoc.get(normalizeDocument(p.documento));
+      return { ...p, garmentType: g?.garmentType || null, garmentSize: g?.garmentSize || null };
+    }),
     finishers: finishers.map(serializeFinisher),
     categories,
   };
