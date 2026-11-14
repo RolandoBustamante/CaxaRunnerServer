@@ -137,6 +137,28 @@ router.delete("/users/:id", requireAuth, async (req, res) => {
   }
 });
 
+// PUT /api/users/:id/password — solo MASTER
+router.put("/users/:id/password", requireAuth, async (req, res) => {
+  if (req.user.role !== "MASTER")
+    return res.status(403).json({ error: "Sin permiso" });
+
+  const id = parseInt(req.params.id, 10);
+  const { password } = req.body;
+  if (Number.isNaN(id) || !password || password.length < 4)
+    return res.status(400).json({ error: "Contraseña requerida (mínimo 4 caracteres)" });
+
+  try {
+    const passwordHash = await bcrypt.hash(password, 10);
+    await prisma.user.update({ where: { id }, data: { passwordHash } });
+    res.json({ success: true });
+  } catch (err) {
+    if (err.code === "P2025")
+      return res.status(404).json({ error: "Usuario no encontrado" });
+    console.error(err);
+    res.status(500).json({ error: "Error al cambiar contraseña" });
+  }
+});
+
 router.post("/users/:id/races", requireAuth, async (req, res) => {
   if (req.user.role !== "MASTER") {
     return res.status(403).json({ error: "Sin permiso" });
