@@ -1055,16 +1055,9 @@ function buildTrailCertificateHtmlDocument(race, certificate) {
   const eventDate = formatDateEs(race?.eventDate);
   const trailLogoDataUri = getTrailLogoDataUri();
   const crLogoDataUri = getTrailCajamarcaLogoDataUri();
-  const isNoTimeCertificate = Boolean(certificate?.noTime);
   const officialTime = formatCertificateTime(certificate.timeMs);
-  const subtitle = isNoTimeCertificate
-    ? "El comité organizador certifica una llegada validada sin tiempo oficial."
-    : "El comité organizador certifica que el corredor(a) concluyó oficialmente la prueba.";
-  const summary = isNoTimeCertificate
-    ? `Se certifica la llegada validada a la distancia de <strong>${escapeHtml(certificate.distance)}</strong>, con registro confirmado <strong>sin tiempo oficial</strong>.`
-    : `Concluyó oficialmente la distancia de <strong>${escapeHtml(certificate.distance)}</strong>, ocupando el puesto <strong>${escapeHtml(certificate.position)}</strong> en la clasificación general de su distancia, con un tiempo oficial de <strong>${escapeHtml(officialTime)}</strong>.`;
-  const timeLabel = isNoTimeCertificate ? "Estado" : "Tiempo oficial";
-  const timeValue = isNoTimeCertificate ? "ST" : officialTime;
+  const subtitle = "El comité organizador certifica que el corredor(a) concluyó oficialmente la prueba.";
+  const summary = `Concluyó oficialmente la distancia de <strong>${escapeHtml(certificate.distance)}</strong>, ocupando el puesto <strong>${escapeHtml(certificate.position)}</strong> en la clasificación general de su distancia, con un tiempo oficial de <strong>${escapeHtml(officialTime)}</strong>.`;
 
   return `<!doctype html>
   <html lang="es">
@@ -1303,8 +1296,8 @@ function buildTrailCertificateHtmlDocument(race, certificate) {
 
           <div class="metrics">
             <div class="metric">
-              <div class="metric-value">${escapeHtml(timeValue)}</div>
-              <div class="metric-label">${timeLabel}</div>
+              <div class="metric-value">${escapeHtml(officialTime)}</div>
+              <div class="metric-label">Tiempo oficial</div>
             </div>
             <div class="metric">
               <div class="metric-value">${escapeHtml(certificate.position ?? "-")}</div>
@@ -1354,32 +1347,11 @@ function buildCertificateHtmlDocument(race, certificate) {
   const eventDate = formatDateEs(race?.eventDate);
   const logoDataUri = getLogoDataUri();
   const watermarkDataUri = getWatermarkDataUri();
-  const isNoTimeCertificate = Boolean(certificate?.noTime);
-  const subtitle = isNoTimeCertificate
-    ? "El comité organizador certifica una llegada validada sin tiempo oficial."
-    : "El comité organizador certifica que el corredor(a) concluyó oficialmente la prueba.";
-  const summary = isNoTimeCertificate
-    ? `Se certifica la llegada validada a la distancia de <strong>${escapeHtml(certificate.distance)}</strong>, con registro confirmado <strong>sin tiempo oficial</strong>.`
-    : `Concluyó oficialmente la distancia de <strong>${escapeHtml(certificate.distance)}</strong>,
+  const subtitle = "El comité organizador certifica que el corredor(a) concluyó oficialmente la prueba.";
+  const summary = `Concluyó oficialmente la distancia de <strong>${escapeHtml(certificate.distance)}</strong>,
             ocupando el puesto <strong>${escapeHtml(certificate.position)}</strong> en la clasificación general de su distancia,
             con un tiempo oficial de <strong>${escapeHtml(formatCertificateTime(certificate.timeMs))}</strong>.`;
-  const metrics = isNoTimeCertificate
-    ? `
-          <div class="metrics">
-            <div class="metric">
-              <div class="metric-value">${escapeHtml(certificate.distance)}</div>
-              <div class="metric-label">Distancia</div>
-            </div>
-            <div class="metric">
-              <div class="metric-value">ST</div>
-              <div class="metric-label">Estado</div>
-            </div>
-            <div class="metric">
-              <div class="metric-value">${escapeHtml(certificate.dorsal)}</div>
-              <div class="metric-label">Dorsal</div>
-            </div>
-          </div>`
-    : `
+  const metrics = `
           <div class="metrics">
             <div class="metric">
               <div class="metric-value">${escapeHtml(formatCertificateTime(certificate.timeMs))}</div>
@@ -1394,13 +1366,7 @@ function buildCertificateHtmlDocument(race, certificate) {
               <div class="metric-label">Dorsal</div>
             </div>
           </div>`;
-  const secondaryMeta = isNoTimeCertificate
-    ? `
-          <div class="secondary-meta">
-            <span><strong>Estado:</strong> Sin tiempo oficial</span>
-            <span><strong>Registro:</strong> Llegada validada</span>
-          </div>`
-    : `
+  const secondaryMeta = `
           <div class="secondary-meta">
             <span><strong>Puesto por género:</strong> ${escapeHtml(certificate.genderPosition ?? "-")}</span>
             <span><strong>Categoría:</strong> ${escapeHtml(certificate.categoryName ?? "-")}</span>
@@ -1969,6 +1935,26 @@ app.get("/api/public/:slug", async (req, res) => {
   }
 });
 
+// Los inscritos con dorsal que nunca cruzaron meta aparecen como ST al final de la tabla.
+// Sin dorsal no hay fila: ese inscrito nunca llego a correr.
+function buildSinTiempoRows(participants, finishers, showDorsalPublic) {
+  const conTiempo = new Set(finishers.map((finisher) => normalizeDorsal(finisher.dorsal)));
+  return participants
+    .filter((participant) => participant.dorsal && !conTiempo.has(normalizeDorsal(participant.dorsal)))
+    .map((participant) => ({
+      id: `participante-${participant.id}`,
+      dorsal: showDorsalPublic ? participant.dorsal : null,
+      certificateDorsal: null,
+      position: null,
+      timeMs: null,
+      disqualified: false,
+      dqReason: null,
+      noTime: true,
+      name: participant.nombre,
+      distance: participant.distancia || null,
+    }));
+}
+
 app.get("/api/public/:slug/results", async (req, res) => {
   try {
     const race = await resolveRaceBySlug(req.params.slug);
@@ -1991,6 +1977,8 @@ app.get("/api/public/:slug/results", async (req, res) => {
       participants.map((participant) => [normalizeDorsal(participant.dorsal), participant])
     );
 
+    const sinTiempo = buildSinTiempoRows(participants, finishers, race.showDorsalPublic);
+
     res.json({
       race: serializeRace(race),
       results: finishers.map((finisher) => {
@@ -2007,7 +1995,7 @@ app.get("/api/public/:slug/results", async (req, res) => {
           name: participant?.nombre || "-",
           distance: participant?.distancia || null,
         };
-      }),
+      }).concat(sinTiempo),
     });
   } catch (err) {
     console.error(err);
@@ -2055,7 +2043,7 @@ async function loadPublicCertificate(slug, dorsal, documento) {
   ]);
 
   if (!participant) fail(403, "Documento no valido para este dorsal");
-  if (!finisher || (finisher.disqualified && !isNoTimeFinisher(finisher))) {
+  if (!finisher || finisher.disqualified) {
     fail(404, "No hay certificado disponible para este dorsal");
   }
 
@@ -2077,7 +2065,6 @@ async function loadPublicCertificate(slug, dorsal, documento) {
       genderPosition: standings?.genderPosition ?? null,
       categoryName: standings?.categoryName ?? null,
       categoryPosition: standings?.categoryPosition ?? null,
-      noTime: isNoTimeFinisher(finisher),
       certificateCode: `CR-${race.id}-${finisher.id}-${normalizeText(finisher.dorsal)}`,
     },
   };
