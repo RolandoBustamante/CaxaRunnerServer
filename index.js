@@ -10,6 +10,7 @@ const sharp = require("sharp");
 const { PrismaClient } = require("./generated/prisma");
 const requireAuth = require("./middleware/auth");
 const { WELCOME_CARD_WIDTH, WELCOME_CARD_HEIGHT, buildWelcomeHtmlDocument, shortName } = require("./utils/welcomeCard");
+const { buildMediaCertificateHtmlDocument } = require("./utils/mediaCertificate");
 const authRouter = require("./routes/auth");
 const {
   getAdminNumbers,
@@ -52,7 +53,7 @@ const DEFAULT_CATEGORIES = [
   { name: "Master C", minAge: 60, maxAge: null, distance: null, gender: null },
 ];
 const NO_TIME_REASON = "__NO_TIME__";
-const CERTIFICATE_TEMPLATES = new Set(["classic", "trail"]);
+const CERTIFICATE_TEMPLATES = new Set(["classic", "trail", "media"]);
 const DEFAULT_CERTIFICATE_TEMPLATE = "classic";
 let cachedLogoDataUri = null;
 let cachedWatermarkDataUri = null;
@@ -1332,8 +1333,22 @@ function buildTrailCertificateHtmlDocument(race, certificate) {
 }
 
 function buildCertificateHtmlDocument(race, certificate) {
-  if (normalizeCertificateTemplate(race?.certificateTemplate) === "trail") {
+  const template = normalizeCertificateTemplate(race?.certificateTemplate);
+  if (template === "trail") {
     return buildTrailCertificateHtmlDocument(race, certificate);
+  }
+  // Los assets de la media maraton son los mismos de la tarjeta de bienvenida.
+  if (template === "media") {
+    return buildMediaCertificateHtmlDocument({
+      race,
+      certificate,
+      eventDate: formatDateEs(race?.eventDate),
+      officialTime: formatCertificateTime(certificate.timeMs),
+      raceLogoDataUri: getWelcomeRaceLogoDataUri(),
+      clubLogoDataUri: getWelcomeClubLogoDataUri(),
+      backgroundDataUri: getWelcomeBackgroundDataUri(),
+      scriptFontDataUri: getWelcomeScriptFontDataUri(),
+    });
   }
 
   const eventDate = formatDateEs(race?.eventDate);
@@ -2000,144 +2015,60 @@ app.get("/api/public/:slug/results", async (req, res) => {
   }
 });
 
-app.post("/api/public/:slug/certificate", async (req, res) => {
-  const dorsal = String(req.body?.dorsal || "").trim();
-  const documento = String(req.body?.documento || "").trim();
+// Las cuatro rutas de certificado validan y arman exactamente lo mismo; solo cambia que
+// devuelven JSON, PDF, PNG o el HTML suelto para la vista previa.
+async function loadPublicCertificate(slug, dorsal, documento) {
+  const fail = (statusCode, message) => {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    throw error;
+  };
 
-  if (!dorsal || !documento) {
-    return res.status(400).json({ error: "dorsal y documento requeridos" });
-  }
+  const race = await resolveRaceBySlug(slug);
+  if (!race.certificatesEnabled) fail(403, "Certificados no disponibles para esta carrera");
+  if (!race.isOfficial) fail(403, "Los certificados aun no estan disponibles");
 
-  try {
-    const race = await resolveRaceBySlug(req.params.slug);
-    if (!race.certificatesEnabled) {
-      return res.status(403).json({ error: "Certificados no disponibles para esta carrera" });
-    }
-    if (!race.isOfficial) {
-      return res.status(403).json({ error: "Los certificados aun no estan disponibles" });
-    }
-
-    const [participant, finisher, finishers, participants, categories] = await Promise.all([
-      prisma.participant.findFirst({
-        where: {
-          raceId: race.id,
-          dorsal,
-          documento,
-        },
-      }),
-      prisma.finisher.findUnique({
-        where: {
-          raceId_dorsal: {
-            raceId: race.id,
-            dorsal,
-          },
-        },
-      }),
-      prisma.finisher.findMany({
-        where: { raceId: race.id },
-        orderBy: { position: "asc" },
-      }),
-      prisma.participant.findMany({
-        where: { raceId: race.id },
-      }),
-      getRaceCategories(race),
-    ]);
-
-    if (!participant) {
-      return res.status(403).json({ error: "Documento no valido para este dorsal" });
-    }
-
-    if (!finisher || (finisher.disqualified && !isNoTimeFinisher(finisher))) {
-      return res.status(404).json({ error: "No hay certificado disponible para este dorsal" });
-    }
-
-    const standings = buildCertificateContext({
-      finishers,
-      participants,
-      categories,
-      dorsal,
-    });
-    const certificateCode = `CR-${race.id}-${finisher.id}-${normalizeText(finisher.dorsal)}`;
-
-    res.json({
-      race: serializeRace(race),
-      certificate: {
-        dorsal: finisher.dorsal,
-        position: standings?.distanceOverallPosition ?? standings?.overallPosition ?? finisher.position,
-        timeMs: Number(finisher.elapsedMs) / 1000,
-        name: participant.nombre,
-        distance: participant.distancia,
-        genderPosition: standings?.genderPosition ?? null,
-        categoryName: standings?.categoryName ?? null,
-        categoryPosition: standings?.categoryPosition ?? null,
-        noTime: isNoTimeFinisher(finisher),
-        certificateCode,
+  const [participant, finisher, finishers, participants, categories] = await Promise.all([
+    prisma.participant.findFirst({
+      where: {
+        raceId: race.id,
+        dorsal,
+        documento,
       },
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(err.statusCode || 500).json({ error: err.message || "Error" });
-  }
-});
-
-app.post("/api/public/:slug/certificate/pdf", async (req, res) => {
-  const dorsal = String(req.body?.dorsal || "").trim();
-  const documento = String(req.body?.documento || "").trim();
-
-  if (!dorsal || !documento) {
-    return res.status(400).json({ error: "dorsal y documento requeridos" });
-  }
-
-  try {
-    const race = await resolveRaceBySlug(req.params.slug);
-    if (!race.certificatesEnabled) {
-      return res.status(403).json({ error: "Certificados no disponibles para esta carrera" });
-    }
-    if (!race.isOfficial) {
-      return res.status(403).json({ error: "Los certificados aun no estan disponibles" });
-    }
-
-    const [participant, finisher, finishers, participants, categories] = await Promise.all([
-      prisma.participant.findFirst({
-        where: {
+    }),
+    prisma.finisher.findUnique({
+      where: {
+        raceId_dorsal: {
           raceId: race.id,
           dorsal,
-          documento,
         },
-      }),
-      prisma.finisher.findUnique({
-        where: {
-          raceId_dorsal: {
-            raceId: race.id,
-            dorsal,
-          },
-        },
-      }),
-      prisma.finisher.findMany({
-        where: { raceId: race.id },
-        orderBy: { position: "asc" },
-      }),
-      prisma.participant.findMany({
-        where: { raceId: race.id },
-      }),
-      getRaceCategories(race),
-    ]);
+      },
+    }),
+    prisma.finisher.findMany({
+      where: { raceId: race.id },
+      orderBy: { position: "asc" },
+    }),
+    prisma.participant.findMany({
+      where: { raceId: race.id },
+    }),
+    getRaceCategories(race),
+  ]);
 
-    if (!participant) {
-      return res.status(403).json({ error: "Documento no valido para este dorsal" });
-    }
+  if (!participant) fail(403, "Documento no valido para este dorsal");
+  if (!finisher || (finisher.disqualified && !isNoTimeFinisher(finisher))) {
+    fail(404, "No hay certificado disponible para este dorsal");
+  }
 
-    if (!finisher || (finisher.disqualified && !isNoTimeFinisher(finisher))) {
-      return res.status(404).json({ error: "No hay certificado disponible para este dorsal" });
-    }
+  const standings = buildCertificateContext({
+    finishers,
+    participants,
+    categories,
+    dorsal,
+  });
 
-    const standings = buildCertificateContext({
-      finishers,
-      participants,
-      categories,
-      dorsal,
-    });
-    const certificate = {
+  return {
+    race,
+    certificate: {
       dorsal: finisher.dorsal,
       position: standings?.distanceOverallPosition ?? standings?.overallPosition ?? finisher.position,
       timeMs: Number(finisher.elapsedMs) / 1000,
@@ -2148,96 +2079,53 @@ app.post("/api/public/:slug/certificate/pdf", async (req, res) => {
       categoryPosition: standings?.categoryPosition ?? null,
       noTime: isNoTimeFinisher(finisher),
       certificateCode: `CR-${race.id}-${finisher.id}-${normalizeText(finisher.dorsal)}`,
-    };
+    },
+  };
+}
 
-    const pdfBuffer = await renderCertificatePdf(race, certificate);
-    res.setHeader("Content-Type", "application/pdf");
-    res.setHeader("Content-Disposition", `attachment; filename="${getCertificateFileName(certificate)}"`);
-    res.send(pdfBuffer);
-  } catch (err) {
-    console.error(err);
-    res.status(err.statusCode || 500).json({ error: err.message || "Error al generar certificado PDF" });
-  }
+// Cada ruta publica de certificado: valida, arma y entrega en su formato.
+function certificateRoute(path, errorMessage, send) {
+  app.post(`/api/public/:slug/certificate${path}`, async (req, res) => {
+    const dorsal = String(req.body?.dorsal || "").trim();
+    const documento = String(req.body?.documento || "").trim();
+
+    if (!dorsal || !documento) {
+      return res.status(400).json({ error: "dorsal y documento requeridos" });
+    }
+
+    try {
+      const { race, certificate } = await loadPublicCertificate(req.params.slug, dorsal, documento);
+      await send(res, race, certificate);
+    } catch (err) {
+      console.error(err);
+      res.status(err.statusCode || 500).json({ error: err.message || errorMessage });
+    }
+  });
+}
+
+certificateRoute("", "Error", (res, race, certificate) => {
+  res.json({ race: serializeRace(race), certificate });
 });
 
-app.post("/api/public/:slug/certificate/image", async (req, res) => {
-  const dorsal = String(req.body?.dorsal || "").trim();
-  const documento = String(req.body?.documento || "").trim();
+certificateRoute("/pdf", "Error al generar certificado PDF", async (res, race, certificate) => {
+  const pdfBuffer = await renderCertificatePdf(race, certificate);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader("Content-Disposition", `attachment; filename="${getCertificateFileName(certificate)}"`);
+  res.send(pdfBuffer);
+});
 
-  if (!dorsal || !documento) {
-    return res.status(400).json({ error: "dorsal y documento requeridos" });
-  }
+certificateRoute("/image", "Error al generar imagen del certificado", async (res, race, certificate) => {
+  const imageBuffer = await renderCertificateImage(race, certificate);
+  res.setHeader("Content-Type", "image/png");
+  res.setHeader("Content-Disposition", `attachment; filename="${getCertificateImageFileName(certificate)}"`);
+  res.send(imageBuffer);
+});
 
-  try {
-    const race = await resolveRaceBySlug(req.params.slug);
-    if (!race.certificatesEnabled) {
-      return res.status(403).json({ error: "Certificados no disponibles para esta carrera" });
-    }
-    if (!race.isOfficial) {
-      return res.status(403).json({ error: "Los certificados aun no estan disponibles" });
-    }
-
-    const [participant, finisher, finishers, participants, categories] = await Promise.all([
-      prisma.participant.findFirst({
-        where: {
-          raceId: race.id,
-          dorsal,
-          documento,
-        },
-      }),
-      prisma.finisher.findUnique({
-        where: {
-          raceId_dorsal: {
-            raceId: race.id,
-            dorsal,
-          },
-        },
-      }),
-      prisma.finisher.findMany({
-        where: { raceId: race.id },
-        orderBy: { position: "asc" },
-      }),
-      prisma.participant.findMany({
-        where: { raceId: race.id },
-      }),
-      getRaceCategories(race),
-    ]);
-
-    if (!participant) {
-      return res.status(403).json({ error: "Documento no valido para este dorsal" });
-    }
-
-    if (!finisher || (finisher.disqualified && !isNoTimeFinisher(finisher))) {
-      return res.status(404).json({ error: "No hay certificado disponible para este dorsal" });
-    }
-
-    const standings = buildCertificateContext({
-      finishers,
-      participants,
-      categories,
-      dorsal,
-    });
-    const certificate = {
-      dorsal: finisher.dorsal,
-      position: standings?.distanceOverallPosition ?? standings?.overallPosition ?? finisher.position,
-      timeMs: Number(finisher.elapsedMs) / 1000,
-      name: participant.nombre,
-      distance: participant.distancia,
-      genderPosition: standings?.genderPosition ?? null,
-      categoryName: standings?.categoryName ?? null,
-      categoryPosition: standings?.categoryPosition ?? null,
-      noTime: isNoTimeFinisher(finisher),
-      certificateCode: `CR-${race.id}-${finisher.id}-${normalizeText(finisher.dorsal)}`,
-    };
-
-    const imageBuffer = await renderCertificateImage(race, certificate);
-    res.setHeader("Content-Type", "image/png");
-    res.setHeader("Content-Disposition", `attachment; filename="${getCertificateImageFileName(certificate)}"`);
-    res.send(imageBuffer);
-  } catch (err) {
-    console.error(err);
-    res.status(err.statusCode || 500).json({ error: err.message || "Error al generar imagen del certificado" });
-  }
+// La vista previa del front muestra este HTML en un iframe, asi previa y descarga
+// salen del mismo archivo y no hay dos disenos que mantener sincronizados.
+certificateRoute("/html", "Error al generar el certificado", (res, race, certificate) => {
+  res.setHeader("Content-Type", "text/html; charset=utf-8");
+  res.send(buildCertificateHtmlDocument(race, certificate));
 });
 
 app.get("/api/public/:slug/registration", async (req, res) => {
