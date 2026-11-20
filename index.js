@@ -1796,6 +1796,7 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
   const distanceCounters = new Map();
   const genderCounters = new Map();
   const categoryCounters = new Map();
+  const awardCategoryCounters = new Map();
   const standings = new Map();
 
   activeFinishers.forEach((finisher, index) => {
@@ -1816,20 +1817,28 @@ function buildCertificateContext({ finishers, participants, categories, dorsal }
       : null;
     const distanceOverallPosition = distanceRankResult?.rank ?? null;
     const genderPosition = genderRankResult?.rank ?? null;
-    // El certificado dice en que puesto termino en su categoria, sin descontar a los ganadores
-    // absolutos: ese descuento es de la premiacion, y en el papel se leia un puesto mejor del real.
-    const categoryPosition = categoryRankResult?.rank ?? null;
+    const officialCategoryPosition = categoryRankResult?.rank ?? null;
+    const isAbsoluteWinner = genderPosition != null && genderPosition <= 3;
+    const awardCategoryRankResult = categoryKey && !isAbsoluteWinner
+      ? advanceCompetitionRank(awardCategoryCounters.get(categoryKey), sourcePosition)
+      : null;
+    const awardCategoryPosition = awardCategoryRankResult?.rank ?? null;
 
     if (distanceKey) distanceCounters.set(distanceKey, distanceRankResult.state);
     if (genderKey) genderCounters.set(genderKey, genderRankResult.state);
     if (categoryKey) categoryCounters.set(categoryKey, categoryRankResult.state);
+    if (categoryKey && awardCategoryRankResult) {
+      awardCategoryCounters.set(categoryKey, awardCategoryRankResult.state);
+    }
 
     standings.set(normalizeDorsal(finisher.dorsal), {
       overallPosition: index + 1,
       distanceOverallPosition: distanceOverallPosition ?? index + 1,
       genderPosition,
-      categoryPosition,
+      categoryPosition: awardCategoryPosition ?? officialCategoryPosition,
+      officialCategoryPosition,
       categoryName: meta.ageCategoryName,
+      isAbsoluteWinner,
     });
   });
 
