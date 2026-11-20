@@ -23,10 +23,18 @@ function grecaDataUri(color = "%23f0be72") {
 }
 
 // Una sola linea: el nombre cursivo se achica para no salirse de los 860px utiles.
-// Factor 0.42em por caracter, medido sobre Allura en caja mixta.
+// Anchos medidos en Chrome sobre assets/allura-latin.woff2 (em por caracter, +5% de holgura
+// porque Allura kernea mas ancho que la suma de avances). Una MAYUSCULA pesa casi el doble
+// que una minuscula: el padron llega en caja alta desde Excel y un solo factor promedio lo desborda.
+const ALLURA_EM = { upper: 0.68, lower: 0.39, space: 0.23 };
+
 function nameFontSize(name) {
-  const length = Math.max(1, String(name || "").trim().length);
-  return Math.round(Math.min(88, Math.max(32, 860 / (length * 0.42))));
+  const em = [...String(name || "").trim()].reduce((sum, char) => {
+    if (char === " ") return sum + ALLURA_EM.space;
+    const isUpper = char === char.toUpperCase() && char !== char.toLowerCase();
+    return sum + (isUpper ? ALLURA_EM.upper : ALLURA_EM.lower);
+  }, 0.5);
+  return Math.round(Math.min(88, Math.max(32, 860 / em)));
 }
 
 /**
@@ -262,6 +270,9 @@ if (require.main === module) {
 
   assert(nameFontSize("Ana Paz") > nameFontSize("Maria Fernanda Bustamante Rojas"));
   assert(nameFontSize("x".repeat(200)) >= 32 && nameFontSize("A") <= 88);
+  // El caso que desbordaba: el mismo nombre en caja alta necesita mucho menos cuerpo.
+  const mixto = "Karla Yanina Bustamante Becerra";
+  assert(nameFontSize(mixto.toUpperCase()) < nameFontSize(mixto) * 0.8);
 
   const toDataUri = (file, mime) => {
     const full = path.join(__dirname, "..", "assets", file);

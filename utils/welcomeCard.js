@@ -51,10 +51,12 @@ function shortName(name) {
 }
 
 // Una sola linea: el tamano se calcula para que el texto no se salga de los 900px utiles.
-// Factor 0.70em por caracter, medido sobre Arial Black en mayusculas.
+// Factor 0.75em por caracter, medido en Chrome sobre Arial Black en mayusculas con el
+// letter-spacing de .name. El 0.70 anterior se quedaba corto con apellidos de letras anchas
+// (ROSA HUAMANCHUMO media 913px y se recortaba por los lados).
 function nameFontSize(name) {
   const length = Math.max(1, String(name || "").trim().length);
-  return Math.round(Math.min(96, Math.max(30, 900 / (length * 0.7))));
+  return Math.round(Math.min(96, Math.max(30, 900 / (length * 0.75))));
 }
 
 function greetingFor(genero) {
