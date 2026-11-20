@@ -89,7 +89,11 @@ function buildMediaCertificateHtmlDocument({
         background-image: ${backgroundDataUri ? `url("${backgroundDataUri}")` : "none"};
         background-size: cover;
         background-position: 50% 58%;
-        filter: saturate(0.85) contrast(1.04);
+        /* Aqui no va ningun filter: un filtro CSS obliga a Chromium a rasterizar la pagina
+           entera a resolucion de impresion en vez de incrustar el JPEG tal cual. Con
+           saturate(0.85) contrast(1.04) el PDF pesaba 6947 KB y el render tardaba 1183ms;
+           sin el, 628 KB y 433ms. El ajuste no se notaba: encima va el velo de
+           .photo-bg::after al 72-93% de opacidad. */
       }
       /* Velo fuerte y parejo: con la ciudad a plena vista no se leen ni el nombre ni los tiempos. */
       .photo-bg::after {
