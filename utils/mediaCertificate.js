@@ -246,7 +246,7 @@ function buildMediaCertificateHtmlDocument({
 
         <div class="secondary">
           <span><strong>Categoría:</strong> ${escapeHtml(certificate?.categoryName ?? "-")}</span>
-          <span><strong>Puesto en categoría:</strong> ${escapeHtml(certificate?.categoryPosition ?? "-")}</span>
+          <span><strong>Puesto en categoría sin absolutos:</strong> ${escapeHtml(certificate?.categoryPosition ?? "-")}</span>
           <span><strong>Distancia:</strong> ${escapeHtml(certificate?.distance ?? "-")}</span>
         </div>
 

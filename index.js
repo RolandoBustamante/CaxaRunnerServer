@@ -1311,7 +1311,7 @@ function buildTrailCertificateHtmlDocument(race, certificate) {
 
           <div class="secondary-meta">
             <span><strong>Categoría:</strong> ${escapeHtml(certificate.categoryName ?? "-")}</span>
-            <span><strong>Puesto en categoría:</strong> ${escapeHtml(certificate.categoryPosition ?? "-")}</span>
+            <span><strong>Puesto en categoría sin absolutos:</strong> ${escapeHtml(certificate.categoryPosition ?? "-")}</span>
             <span><strong>Distancia:</strong> ${escapeHtml(certificate.distance ?? "-")}</span>
           </div>
 
@@ -1370,7 +1370,7 @@ function buildCertificateHtmlDocument(race, certificate) {
           <div class="secondary-meta">
             <span><strong>Puesto por género:</strong> ${escapeHtml(certificate.genderPosition ?? "-")}</span>
             <span><strong>Categoría:</strong> ${escapeHtml(certificate.categoryName ?? "-")}</span>
-            <span><strong>Puesto en categoría:</strong> ${escapeHtml(certificate.categoryPosition ?? "-")}</span>
+            <span><strong>Puesto en categoría sin absolutos:</strong> ${escapeHtml(certificate.categoryPosition ?? "-")}</span>
           </div>`;
 
   return `<!doctype html>
